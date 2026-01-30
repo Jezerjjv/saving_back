@@ -8,6 +8,7 @@ import fixedIncomesRouter from './routes/fixedIncomes.js';
 import fixedExpensesRouter from './routes/fixedExpenses.js';
 import quickTemplatesRouter from './routes/quickTemplates.js';
 import transfersRouter from './routes/transfers.js';
+import settingsRouter from './routes/settings.js';
 import { startFixedDailyJob } from './jobs.js';
 
 const app = express();
@@ -23,6 +24,7 @@ app.use('/api/fixed-incomes', fixedIncomesRouter);
 app.use('/api/fixed-expenses', fixedExpensesRouter);
 app.use('/api/quick-templates', quickTemplatesRouter);
 app.use('/api/transfers', transfersRouter);
+app.use('/api/settings', settingsRouter);
 
 app.get('/api/health', (_, res) => res.json({ ok: true }));
 

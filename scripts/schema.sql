@@ -79,6 +79,12 @@ CREATE TABLE IF NOT EXISTS transfers (
 
 CREATE INDEX IF NOT EXISTS idx_transfers_date ON transfers(date);
 
+-- Configuración de la app (key-value, extensible)
+CREATE TABLE IF NOT EXISTS app_settings (
+  key   VARCHAR(255) PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT 'null'
+);
+
 -- Comentarios opcionales
 COMMENT ON TABLE accounts IS 'Cuentas bancarias del usuario';
 COMMENT ON TABLE categories IS 'Categorías para clasificar gastos e ingresos';
@@ -87,3 +93,4 @@ COMMENT ON TABLE fixed_incomes IS 'Plantillas de ingresos recurrentes (ej. nómi
 COMMENT ON TABLE fixed_expenses IS 'Plantillas de gastos recurrentes (ej. gym, Cursor) que se aplican un día del mes';
 COMMENT ON TABLE quick_templates IS 'Plantillas rápidas (ej. Café): si show_in_quick = true aparecen como botón en la pestaña';
 COMMENT ON TABLE transfers IS 'Transferencias entre cuentas';
+COMMENT ON TABLE app_settings IS 'Preferencias de la app (ej. blurBalance). key en camelCase, value en JSON.';

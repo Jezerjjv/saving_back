@@ -1,6 +1,7 @@
 -- Eliminar tablas en orden (por dependencias)
 -- Usar solo si quieres resetear la base de datos
 
+DROP TABLE IF EXISTS app_settings;
 DROP TABLE IF EXISTS transfers;
 DROP TABLE IF EXISTS transactions;
 DROP TABLE IF EXISTS quick_templates;

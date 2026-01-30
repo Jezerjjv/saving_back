@@ -642,3 +642,29 @@ export async function deleteTransfer(id) {
   const { rowCount } = await query('DELETE FROM transfers WHERE id = $1', [id]);
   return rowCount > 0;
 }
+
+// --- App settings (key-value, extensible) ---
+export async function getAppSettings() {
+  const { rows } = await query('SELECT key, value FROM app_settings');
+  const out = {};
+  for (const row of rows) {
+    try {
+      out[row.key] = JSON.parse(row.value ?? 'null');
+    } catch {
+      out[row.key] = row.value;
+    }
+  }
+  return out;
+}
+
+export async function updateAppSettings(patch) {
+  if (!patch || typeof patch !== 'object') return getAppSettings();
+  for (const [key, value] of Object.entries(patch)) {
+    const val = JSON.stringify(value === undefined ? null : value);
+    await query(
+      'INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2',
+      [key, val]
+    );
+  }
+  return getAppSettings();
+}

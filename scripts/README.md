@@ -13,6 +13,7 @@
 - **migrate_fixed_expenses.sql**: Añade la columna `expense_type` a `transactions` y crea la tabla `fixed_expenses`. Ejecutar si ya tenías la BD creada antes.
 - **migrate_quick_templates.sql**: Crea la tabla `quick_templates` (plantillas rápidas con "Mostrar en rápidos"). Ejecutar si ya tenías la BD sin esta tabla.
 - **migrate_quick_templates_icon.sql**: Añade la columna `icon` a `quick_templates` (igual que en categorías). Ejecutar si ya tenías `quick_templates` sin icono.
+- **migrate_app_settings.sql**: Crea la tabla `app_settings` (configuración key-value: difuminar saldo, etc.). Ejecutar si ya tenías la BD sin esta tabla.
 - **drop.sql**: Borra todas las tablas. Solo si quieres empezar de cero.
 
 ## Variables de entorno (.env)
