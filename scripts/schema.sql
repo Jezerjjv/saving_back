@@ -3,12 +3,13 @@
 -- Ejecutar en tu base de datos (ej. Supabase SQL Editor)
 -- ============================================
 
--- Cuentas: bancarias o efectivo
+-- Cuentas: bancarias o efectivo; cada cuenta en EUR o USD
 CREATE TABLE IF NOT EXISTS accounts (
   id           SERIAL PRIMARY KEY,
   name         VARCHAR(255) NOT NULL,
   balance      NUMERIC(12, 2) NOT NULL DEFAULT 0,
-  account_type VARCHAR(20) NOT NULL DEFAULT 'bank' CHECK (account_type IN ('bank', 'cash'))
+  account_type VARCHAR(20) NOT NULL DEFAULT 'bank' CHECK (account_type IN ('bank', 'cash')),
+  currency     VARCHAR(3) NOT NULL DEFAULT 'EUR' CHECK (currency IN ('EUR', 'USD'))
 );
 
 -- Tipos de producto (extensible: plan pensiones, inversiones, etc.)
@@ -43,12 +44,34 @@ INSERT INTO product_types (name, slug, icon) VALUES
   ('Otro', 'other', '📦')
 ON CONFLICT (slug) DO NOTHING;
 
--- Categorías (nombre + icono)
+-- Iconos disponibles para categorías y productos (se pueden añadir más en Configuración)
+CREATE TABLE IF NOT EXISTS icons (
+  id     SERIAL PRIMARY KEY,
+  symbol VARCHAR(20) NOT NULL,
+  name   VARCHAR(100) NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_icons_symbol ON icons(symbol);
+
+COMMENT ON TABLE icons IS 'Iconos disponibles para categorías y productos; se gestionan en Configuración > Iconos';
+
+-- Categorías (nombre + icono; icon = symbol de la tabla icons)
 CREATE TABLE IF NOT EXISTS categories (
   id         SERIAL PRIMARY KEY,
   name       VARCHAR(255) NOT NULL,
   icon       VARCHAR(50) NOT NULL DEFAULT '📁'
 );
+
+-- Valores iniciales de iconos (muchos para categorías y productos)
+INSERT INTO icons (symbol, name) VALUES
+  ('📁', 'Carpeta'), ('🍔', 'Comida'), ('🚗', 'Coche'), ('🏠', 'Casa'), ('💡', 'Luz'), ('📱', 'Móvil'), ('🛒', 'Carrito'), ('☕', 'Café'), ('💰', 'Dinero'), ('🎁', 'Regalo'),
+  ('✈️', 'Viajes'), ('📚', 'Libros'), ('🏥', 'Salud'), ('👕', 'Ropa'), ('🍕', 'Pizza'), ('⚽', 'Deporte'), ('🎬', 'Cine'), ('💼', 'Trabajo'), ('🧾', 'Recibo'), ('🏦', 'Banco'),
+  ('🍎', 'Fruta'), ('🥗', 'Ensalada'), ('⛽', 'Gasolina'), ('🚌', 'Transporte'), ('🏋️', 'Gimnasio'), ('🎮', 'Juegos'), ('📺', 'TV'), ('🏡', 'Hogar'), ('🌳', 'Naturaleza'), ('🐶', 'Mascotas'),
+  ('🎓', 'Estudios'), ('💊', 'Farmacia'), ('🧴', 'Higiene'), ('🎉', 'Fiestas'), ('🍷', 'Restaurante'), ('🥤', 'Bebidas'), ('🍽️', 'Comida fuera'), ('🛍️', 'Compras'), ('📦', 'Paquete'), ('🔧', 'Reparaciones'),
+  ('💳', 'Tarjeta'), ('🏛️', 'Plan pensiones'), ('📈', 'Inversiones'), ('🐷', 'Ahorro'), ('💹', 'Interés'), ('🧺', 'Supermercado'), ('🚂', 'Tren'), ('🚕', 'Taxi'), ('⛵', 'Ocio'), ('🎸', 'Música'),
+  ('📷', 'Fotos'), ('💻', 'Tecnología'), ('🔌', 'Electricidad'), ('💧', 'Agua'), ('🔥', 'Calefacción'), ('📞', 'Teléfono'), ('🌐', 'Internet'), ('🖥️', 'Ordenador'), ('⌚', 'Reloj'), ('🔑', 'Alquiler'),
+  ('🏢', 'Oficina'), ('🌍', 'Mundo'), ('⭐', 'Favorito'), ('❤️', 'Donaciones'), ('🎯', 'Meta'), ('📊', 'Gráficos'), ('🧩', 'Hobby'), ('🪴', 'Plantas'), ('🛋️', 'Muebles'), ('🧹', 'Limpieza')
+ON CONFLICT (symbol) DO NOTHING;
 
 -- Transacciones (gastos e ingresos)
 CREATE TABLE IF NOT EXISTS transactions (
@@ -99,14 +122,26 @@ CREATE TABLE IF NOT EXISTS quick_templates (
   show_in_quick BOOLEAN NOT NULL DEFAULT true
 );
 
--- Transferencias entre cuentas
-CREATE TABLE IF NOT EXISTS transfers (
+-- Transferencias periódicas (plantillas que se aplican un día del mes)
+CREATE TABLE IF NOT EXISTS periodic_transfers (
   id                SERIAL PRIMARY KEY,
   from_account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   to_account_id     INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   amount            NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
   description       VARCHAR(500),
-  date              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  day_of_month      INTEGER NOT NULL DEFAULT 1 CHECK (day_of_month >= 1 AND day_of_month <= 31),
+  CONSTRAINT chk_periodic_different_accounts CHECK (from_account_id <> to_account_id)
+);
+
+-- Transferencias entre cuentas
+CREATE TABLE IF NOT EXISTS transfers (
+  id                    SERIAL PRIMARY KEY,
+  from_account_id       INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  to_account_id         INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  amount                NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
+  description           VARCHAR(500),
+  date                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  periodic_transfer_id   INTEGER REFERENCES periodic_transfers(id) ON DELETE SET NULL,
   CONSTRAINT chk_different_accounts CHECK (from_account_id <> to_account_id)
 );
 
@@ -127,5 +162,6 @@ COMMENT ON TABLE transactions IS 'Gastos e ingresos (rápidos o fijos aplicados)
 COMMENT ON TABLE fixed_incomes IS 'Plantillas de ingresos recurrentes (ej. nómina) que se aplican un día del mes';
 COMMENT ON TABLE fixed_expenses IS 'Plantillas de gastos recurrentes (ej. gym, Cursor) que se aplican un día del mes';
 COMMENT ON TABLE quick_templates IS 'Plantillas rápidas (ej. Café): si show_in_quick = true aparecen como botón en la pestaña';
+COMMENT ON TABLE periodic_transfers IS 'Plantillas de transferencias recurrentes que se aplican un día del mes';
 COMMENT ON TABLE transfers IS 'Transferencias entre cuentas';
 COMMENT ON TABLE app_settings IS 'Preferencias de la app (ej. blurBalance). key en camelCase, value en JSON.';

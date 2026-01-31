@@ -15,9 +15,9 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { name, balance = 0, accountType = 'bank' } = req.body;
+    const { name, balance = 0, accountType = 'bank', currency = 'EUR' } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'El nombre es obligatorio' });
-    const account = await store.createAccount({ name: name.trim(), balance, accountType });
+    const account = await store.createAccount({ name: name.trim(), balance, accountType, currency });
     res.status(201).json(account);
   } catch (err) {
     console.error(err);
@@ -42,8 +42,8 @@ router.put('/:id', async (req, res) => {
     const id = Number(req.params.id);
     const existing = await store.getAccount(id);
     if (!existing) return res.status(404).json({ error: 'Cuenta no encontrada' });
-    const { name, balance, accountType } = req.body;
-    const account = await store.updateAccount(id, { name, balance, accountType });
+    const { name, balance, accountType, currency } = req.body;
+    const account = await store.updateAccount(id, { name, balance, accountType, currency });
     res.json(account);
   } catch (err) {
     console.error(err);

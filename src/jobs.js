@@ -17,13 +17,28 @@ export async function runFixedDailyJob() {
   const year = now.getFullYear();
   const day = now.getDate();
   try {
-    const [incomes, expenses, interest] = await Promise.all([
+    const [incomes, expenses, periodicTransfers, interest] = await Promise.all([
       store.applyFixedIncomesForMonth(month, year, day),
       store.applyFixedExpensesForMonth(month, year, day),
+      store.applyPeriodicTransfersForMonth(month, year, day),
       store.applyDailyInterest(),
     ]);
     if (incomes.length > 0 || expenses.length > 0) {
       console.log(`[Job] Aplicados ${incomes.length} ingreso(s) fijo(s) y ${expenses.length} gasto(s) fijo(s) para el día ${day}.`);
+    }
+    if (periodicTransfers.length > 0) {
+      const accounts = await store.getAccounts();
+      const nameById = Object.fromEntries((accounts || []).map((a) => [a.id, a.name]));
+      const totalEur = periodicTransfers.reduce((sum, t) => sum + t.amount, 0);
+      console.log(`[Job] [${now.toISOString()}] Transferencias periódicas: ${periodicTransfers.length} aplicada(s) para el día ${day} (total: ${totalEur.toFixed(2)} €):`);
+      periodicTransfers.forEach((t) => {
+        const from = nameById[t.fromAccountId] || `#${t.fromAccountId}`;
+        const to = nameById[t.toAccountId] || `#${t.toAccountId}`;
+        const desc = t.description ? ` — ${t.description}` : '';
+        console.log(`  - ${t.amount.toFixed(2)} €: ${from} → ${to}${desc}`);
+      });
+    } else {
+      console.log(`[Job] [${now.toISOString()}] Transferencias periódicas: 0 para el día ${day} (ninguna pendiente con día ${day}).`);
     }
     if (interest.skipped && interest.reason === 'already_today') {
       console.log(`[Job] Intereses diarios: ya aplicados hoy (se ejecutan 1 vez al día).`);

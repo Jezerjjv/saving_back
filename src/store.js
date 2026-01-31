@@ -1,7 +1,7 @@
 import { query } from './db.js';
 
 function rowAccount(r) {
-  return r ? { id: r.id, name: r.name, balance: Number(r.balance), accountType: r.account_type || 'bank' } : null;
+  return r ? { id: r.id, name: r.name, balance: Number(r.balance), accountType: r.account_type || 'bank', currency: r.currency || 'EUR' } : null;
 }
 function rowAccountProduct(r) {
   if (!r) return null;
@@ -50,6 +50,19 @@ function rowTransfer(r) {
         amount: Number(r.amount),
         description: r.description,
         date: r.date instanceof Date ? r.date.toISOString() : r.date,
+        periodicTransferId: r.periodic_transfer_id != null ? r.periodic_transfer_id : null,
+      }
+    : null;
+}
+function rowPeriodicTransfer(r) {
+  return r
+    ? {
+        id: r.id,
+        fromAccountId: r.from_account_id,
+        toAccountId: r.to_account_id,
+        amount: Number(r.amount),
+        description: r.description,
+        dayOfMonth: r.day_of_month != null ? r.day_of_month : 1,
       }
     : null;
 }
@@ -59,25 +72,26 @@ function rowQuickTemplate(r) {
 
 // --- Accounts ---
 export async function getAccounts() {
-  const { rows } = await query('SELECT id, name, balance, account_type FROM accounts ORDER BY id');
+  const { rows } = await query('SELECT id, name, balance, account_type, currency FROM accounts ORDER BY id');
   return rows.map(rowAccount);
 }
 
 export async function getAccount(id) {
-  const { rows } = await query('SELECT id, name, balance, account_type FROM accounts WHERE id = $1', [id]);
+  const { rows } = await query('SELECT id, name, balance, account_type, currency FROM accounts WHERE id = $1', [id]);
   return rowAccount(rows[0]);
 }
 
-export async function createAccount({ name, balance = 0, accountType = 'bank' }) {
+export async function createAccount({ name, balance = 0, accountType = 'bank', currency = 'EUR' }) {
   const type = accountType === 'cash' ? 'cash' : 'bank';
+  const curr = currency === 'USD' ? 'USD' : 'EUR';
   const { rows } = await query(
-    'INSERT INTO accounts (name, balance, account_type) VALUES ($1, $2, $3) RETURNING id, name, balance, account_type',
-    [name.trim(), Number(balance) || 0, type]
+    'INSERT INTO accounts (name, balance, account_type, currency) VALUES ($1, $2, $3, $4) RETURNING id, name, balance, account_type, currency',
+    [name.trim(), Number(balance) || 0, type, curr]
   );
   return rowAccount(rows[0]);
 }
 
-export async function updateAccount(id, { name, balance, accountType }) {
+export async function updateAccount(id, { name, balance, accountType, currency }) {
   const updates = [];
   const params = [];
   let n = 1;
@@ -93,10 +107,14 @@ export async function updateAccount(id, { name, balance, accountType }) {
     updates.push(`account_type = $${n++}`);
     params.push(accountType === 'cash' ? 'cash' : 'bank');
   }
+  if (currency !== undefined) {
+    updates.push(`currency = $${n++}`);
+    params.push(currency === 'USD' ? 'USD' : 'EUR');
+  }
   if (updates.length === 0) return getAccount(id);
   params.push(id);
   const { rows } = await query(
-    `UPDATE accounts SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, name, balance, account_type`,
+    `UPDATE accounts SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, name, balance, account_type, currency`,
     params
   );
   return rowAccount(rows[0]);
@@ -264,6 +282,58 @@ export async function applyDailyInterest() {
   };
 }
 
+// --- Icons (para categorías y productos) ---
+function rowIcon(r) {
+  return r ? { id: r.id, symbol: r.symbol, name: r.name || null } : null;
+}
+
+export async function getIcons() {
+  const { rows } = await query('SELECT id, symbol, name FROM icons ORDER BY id');
+  return rows.map(rowIcon);
+}
+
+export async function getIcon(id) {
+  const { rows } = await query('SELECT id, symbol, name FROM icons WHERE id = $1', [id]);
+  return rowIcon(rows[0]);
+}
+
+export async function createIcon({ symbol, name }) {
+  const sym = String(symbol).trim().slice(0, 20);
+  if (!sym) throw new Error('El símbolo del icono es obligatorio');
+  const { rows } = await query(
+    'INSERT INTO icons (symbol, name) VALUES ($1, $2) ON CONFLICT (symbol) DO NOTHING RETURNING id, symbol, name',
+    [sym, name ? String(name).trim().slice(0, 100) : null]
+  );
+  if (!rows.length) throw new Error('Ese icono ya existe');
+  return rowIcon(rows[0]);
+}
+
+export async function updateIcon(id, { symbol, name }) {
+  const updates = [];
+  const params = [];
+  let n = 1;
+  if (symbol !== undefined) {
+    updates.push(`symbol = $${n++}`);
+    params.push(String(symbol).trim().slice(0, 20));
+  }
+  if (name !== undefined) {
+    updates.push(`name = $${n++}`);
+    params.push(name == null ? null : String(name).trim().slice(0, 100));
+  }
+  if (updates.length === 0) return getIcon(id);
+  params.push(id);
+  const { rows } = await query(
+    `UPDATE icons SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, symbol, name`,
+    params
+  );
+  return rowIcon(rows[0]);
+}
+
+export async function deleteIcon(id) {
+  const { rowCount } = await query('DELETE FROM icons WHERE id = $1', [id]);
+  return rowCount > 0;
+}
+
 // --- Categories ---
 export async function getCategories() {
   const { rows } = await query('SELECT id, name, icon FROM categories ORDER BY id');
@@ -409,6 +479,28 @@ export async function getMonthlySummary(year) {
     byMonth[m] = { month: m, year: y, income, expense, balance: income - expense };
   }
   return Object.values(byMonth);
+}
+
+/** Por cada día del año con transacciones: si hay ingresos y/o gastos (para indicadores en calendario). */
+export async function getDailyIndicators(year) {
+  const y = year != null ? Number(year) : new Date().getFullYear();
+  const { rows } = await query(
+    `SELECT
+       EXTRACT(MONTH FROM date AT TIME ZONE 'UTC')::int AS month,
+       EXTRACT(DAY FROM date AT TIME ZONE 'UTC')::int AS day,
+       MAX(CASE WHEN type = 'income' THEN 1 ELSE 0 END) AS has_income,
+       MAX(CASE WHEN type = 'expense' THEN 1 ELSE 0 END) AS has_expense
+     FROM transactions
+     WHERE EXTRACT(YEAR FROM date AT TIME ZONE 'UTC') = $1
+     GROUP BY EXTRACT(MONTH FROM date AT TIME ZONE 'UTC'), EXTRACT(DAY FROM date AT TIME ZONE 'UTC')`,
+    [y]
+  );
+  return rows.map((r) => ({
+    month: r.month,
+    day: r.day,
+    hasIncome: Number(r.has_income) === 1,
+    hasExpense: Number(r.has_expense) === 1,
+  }));
 }
 
 export async function createTransaction({ name, categoryId, amount, accountId, type, incomeType, expenseType, date }) {
@@ -786,29 +878,162 @@ export async function deleteQuickTemplate(id) {
 // --- Transfers ---
 export async function getTransfers() {
   const { rows } = await query(
-    'SELECT id, from_account_id, to_account_id, amount, description, date FROM transfers ORDER BY date DESC'
+    'SELECT id, from_account_id, to_account_id, amount, description, date, periodic_transfer_id FROM transfers ORDER BY date DESC'
   );
   return rows.map(rowTransfer);
 }
 
 export async function getTransfer(id) {
   const { rows } = await query(
-    'SELECT id, from_account_id, to_account_id, amount, description, date FROM transfers WHERE id = $1',
+    'SELECT id, from_account_id, to_account_id, amount, description, date, periodic_transfer_id FROM transfers WHERE id = $1',
     [id]
   );
   return rowTransfer(rows[0]);
 }
 
-export async function createTransfer({ fromAccountId, toAccountId, amount, description }) {
+export async function createTransfer({ fromAccountId, toAccountId, amount, description, periodicTransferId }) {
   const amt = Number(amount) || 0;
   const { rows } = await query(
-    `INSERT INTO transfers (from_account_id, to_account_id, amount, description) VALUES ($1, $2, $3, $4)
-     RETURNING id, from_account_id, to_account_id, amount, description, date`,
-    [fromAccountId, toAccountId, amt, description ? description.trim() : null]
+    `INSERT INTO transfers (from_account_id, to_account_id, amount, description, periodic_transfer_id) VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, from_account_id, to_account_id, amount, description, date, periodic_transfer_id`,
+    [fromAccountId, toAccountId, amt, description ? description.trim() : null, periodicTransferId ?? null]
   );
   await query('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [amt, fromAccountId]);
   await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [amt, toAccountId]);
   return rowTransfer(rows[0]);
+}
+
+// --- Periodic transfers (plantillas recurrentes por mes) ---
+export async function getPeriodicTransfers() {
+  const { rows } = await query(
+    'SELECT id, from_account_id, to_account_id, amount, description, day_of_month FROM periodic_transfers ORDER BY id'
+  );
+  return rows.map(rowPeriodicTransfer);
+}
+
+export async function getPeriodicTransfer(id) {
+  const { rows } = await query(
+    'SELECT id, from_account_id, to_account_id, amount, description, day_of_month FROM periodic_transfers WHERE id = $1',
+    [id]
+  );
+  return rowPeriodicTransfer(rows[0]);
+}
+
+export async function createPeriodicTransfer({ fromAccountId, toAccountId, amount, description, dayOfMonth = 1 }) {
+  const day = Math.min(31, Math.max(1, Number(dayOfMonth) || 1));
+  const { rows } = await query(
+    `INSERT INTO periodic_transfers (from_account_id, to_account_id, amount, description, day_of_month) VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, from_account_id, to_account_id, amount, description, day_of_month`,
+    [fromAccountId, toAccountId, Number(amount), description ? description.trim() : null, day]
+  );
+  return rowPeriodicTransfer(rows[0]);
+}
+
+export async function updatePeriodicTransfer(id, { fromAccountId, toAccountId, amount, description, dayOfMonth }) {
+  const updates = [];
+  const params = [];
+  let n = 1;
+  if (fromAccountId !== undefined) {
+    updates.push(`from_account_id = $${n++}`);
+    params.push(fromAccountId);
+  }
+  if (toAccountId !== undefined) {
+    updates.push(`to_account_id = $${n++}`);
+    params.push(toAccountId);
+  }
+  if (amount !== undefined) {
+    updates.push(`amount = $${n++}`);
+    params.push(Number(amount));
+  }
+  if (description !== undefined) {
+    updates.push(`description = $${n++}`);
+    params.push(description ? description.trim() : null);
+  }
+  if (dayOfMonth !== undefined) {
+    updates.push(`day_of_month = $${n++}`);
+    params.push(Math.min(31, Math.max(1, Number(dayOfMonth) || 1)));
+  }
+  if (updates.length === 0) return getPeriodicTransfer(id);
+  params.push(id);
+  const { rows } = await query(
+    `UPDATE periodic_transfers SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, from_account_id, to_account_id, amount, description, day_of_month`,
+    params
+  );
+  return rowPeriodicTransfer(rows[0]);
+}
+
+export async function deletePeriodicTransfer(id) {
+  const { rowCount } = await query('DELETE FROM periodic_transfers WHERE id = $1', [id]);
+  return rowCount > 0;
+}
+
+/** Aplica transferencias periódicas para un mes. Si dayFilter (1-31) se indica, solo aplica las que tienen day_of_month === dayFilter (para el job diario). */
+export async function applyPeriodicTransfersForMonth(month, year, dayFilter = null) {
+  let list = await getPeriodicTransfers();
+  const m = month != null ? Number(month) : new Date().getMonth() + 1;
+  const y = year != null ? Number(year) : new Date().getFullYear();
+  if (dayFilter != null) {
+    const d = Math.min(31, Math.max(1, Number(dayFilter)));
+    list = list.filter((pt) => (pt.dayOfMonth != null ? pt.dayOfMonth : 1) === d);
+  }
+  const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
+  const nextMonth = m === 12 ? 1 : m + 1;
+  const nextYear = m === 12 ? y + 1 : y;
+  const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+  const existing = await query(
+    'SELECT periodic_transfer_id FROM transfers WHERE periodic_transfer_id IS NOT NULL AND date >= $1 AND date < $2',
+    [startDate, endDate]
+  );
+  const appliedIds = new Set(existing.rows.map((r) => r.periodic_transfer_id));
+  const created = [];
+  for (const pt of list) {
+    if (appliedIds.has(pt.id)) continue;
+    const day = pt.dayOfMonth != null ? pt.dayOfMonth : 1;
+    const lastDay = new Date(y, m, 0).getDate();
+    const d = Math.min(day, lastDay);
+    const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}T12:00:00.000Z`;
+    const t = await createTransfer({
+      fromAccountId: pt.fromAccountId,
+      toAccountId: pt.toAccountId,
+      amount: pt.amount,
+      description: pt.description || undefined,
+      periodicTransferId: pt.id,
+    });
+    await query('UPDATE transfers SET date = $1 WHERE id = $2', [dateStr, t.id]);
+    created.push({ ...t, date: dateStr });
+    appliedIds.add(pt.id);
+  }
+  return created;
+}
+
+/** Aplica una sola transferencia periódica por id para el mes/año indicado. */
+export async function applySinglePeriodicTransfer(id, month, year) {
+  const pt = await getPeriodicTransfer(id);
+  if (!pt) return null;
+  const m = month != null ? Number(month) : new Date().getMonth() + 1;
+  const y = year != null ? Number(year) : new Date().getFullYear();
+  const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
+  const nextMonth = m === 12 ? 1 : m + 1;
+  const nextYear = m === 12 ? y + 1 : y;
+  const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+  const existing = await query(
+    'SELECT id FROM transfers WHERE periodic_transfer_id = $1 AND date >= $2 AND date < $3',
+    [id, startDate, endDate]
+  );
+  if (existing.rows.length > 0) return null;
+  const day = pt.dayOfMonth != null ? pt.dayOfMonth : 1;
+  const lastDay = new Date(y, m, 0).getDate();
+  const d = Math.min(day, lastDay);
+  const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}T12:00:00.000Z`;
+  const t = await createTransfer({
+    fromAccountId: pt.fromAccountId,
+    toAccountId: pt.toAccountId,
+    amount: pt.amount,
+    description: pt.description || undefined,
+    periodicTransferId: pt.id,
+  });
+  await query('UPDATE transfers SET date = $1 WHERE id = $2', [dateStr, t.id]);
+  return { ...t, date: dateStr };
 }
 
 export async function deleteTransfer(id) {
