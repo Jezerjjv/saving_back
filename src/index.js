@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import accountsRouter from './routes/accounts.js';
+import productTypesRouter from './routes/productTypes.js';
 import categoriesRouter from './routes/categories.js';
 import transactionsRouter from './routes/transactions.js';
 import fixedIncomesRouter from './routes/fixedIncomes.js';
@@ -18,6 +19,7 @@ app.use(cors());
 app.use(express.json());
 
 app.use('/api/accounts', accountsRouter);
+app.use('/api/product-types', productTypesRouter);
 app.use('/api/categories', categoriesRouter);
 app.use('/api/transactions', transactionsRouter);
 app.use('/api/fixed-incomes', fixedIncomesRouter);

@@ -17,15 +17,24 @@ export async function runFixedDailyJob() {
   const year = now.getFullYear();
   const day = now.getDate();
   try {
-    const [incomes, expenses] = await Promise.all([
+    const [incomes, expenses, interest] = await Promise.all([
       store.applyFixedIncomesForMonth(month, year, day),
       store.applyFixedExpensesForMonth(month, year, day),
+      store.applyDailyInterest(),
     ]);
     if (incomes.length > 0 || expenses.length > 0) {
       console.log(`[Job] Aplicados ${incomes.length} ingreso(s) fijo(s) y ${expenses.length} gasto(s) fijo(s) para el día ${day}.`);
     }
+    if (interest.skipped && interest.reason === 'already_today') {
+      console.log(`[Job] Intereses diarios: ya aplicados hoy (se ejecutan 1 vez al día).`);
+    } else if (interest.applied > 0) {
+      const amount = typeof interest.totalInterest === 'number' ? interest.totalInterest.toFixed(2) : '0.00';
+      console.log(`[Job] Intereses diarios: +${amount} € aplicados a ${interest.applied} cuenta(s).`);
+    } else {
+      console.log(`[Job] Intereses diarios: 0 cuentas con producto Interés (añade un producto tipo Interés con % anual).`);
+    }
   } catch (err) {
-    console.error('[Job] Error aplicando fijos:', err);
+    console.error('[Job] Error aplicando fijos/intereses:', err);
   }
 }
 

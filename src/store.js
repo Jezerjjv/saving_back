@@ -1,7 +1,22 @@
 import { query } from './db.js';
 
 function rowAccount(r) {
-  return r ? { id: r.id, name: r.name, balance: Number(r.balance) } : null;
+  return r ? { id: r.id, name: r.name, balance: Number(r.balance), accountType: r.account_type || 'bank' } : null;
+}
+function rowAccountProduct(r) {
+  if (!r) return null;
+  return {
+    id: r.id,
+    accountId: r.account_id,
+    name: r.name,
+    productTypeId: r.product_type_id,
+    productType: r.product_type_name ? { id: r.product_type_id, name: r.product_type_name, slug: r.product_type_slug, icon: r.product_type_icon } : null,
+    balance: Number(r.balance),
+    interestRateAnnual: r.interest_rate_annual != null ? Number(r.interest_rate_annual) : null,
+  };
+}
+function rowProductType(r) {
+  return r ? { id: r.id, name: r.name, slug: r.slug, icon: r.icon || '📦' } : null;
 }
 function rowCategory(r) {
   return r ? { id: r.id, name: r.name, icon: r.icon } : null;
@@ -44,24 +59,25 @@ function rowQuickTemplate(r) {
 
 // --- Accounts ---
 export async function getAccounts() {
-  const { rows } = await query('SELECT id, name, balance FROM accounts ORDER BY id');
+  const { rows } = await query('SELECT id, name, balance, account_type FROM accounts ORDER BY id');
   return rows.map(rowAccount);
 }
 
 export async function getAccount(id) {
-  const { rows } = await query('SELECT id, name, balance FROM accounts WHERE id = $1', [id]);
+  const { rows } = await query('SELECT id, name, balance, account_type FROM accounts WHERE id = $1', [id]);
   return rowAccount(rows[0]);
 }
 
-export async function createAccount({ name, balance = 0 }) {
+export async function createAccount({ name, balance = 0, accountType = 'bank' }) {
+  const type = accountType === 'cash' ? 'cash' : 'bank';
   const { rows } = await query(
-    'INSERT INTO accounts (name, balance) VALUES ($1, $2) RETURNING id, name, balance',
-    [name.trim(), Number(balance) || 0]
+    'INSERT INTO accounts (name, balance, account_type) VALUES ($1, $2, $3) RETURNING id, name, balance, account_type',
+    [name.trim(), Number(balance) || 0, type]
   );
   return rowAccount(rows[0]);
 }
 
-export async function updateAccount(id, { name, balance }) {
+export async function updateAccount(id, { name, balance, accountType }) {
   const updates = [];
   const params = [];
   let n = 1;
@@ -73,10 +89,14 @@ export async function updateAccount(id, { name, balance }) {
     updates.push(`balance = $${n++}`);
     params.push(Number(balance));
   }
+  if (accountType !== undefined) {
+    updates.push(`account_type = $${n++}`);
+    params.push(accountType === 'cash' ? 'cash' : 'bank');
+  }
   if (updates.length === 0) return getAccount(id);
   params.push(id);
   const { rows } = await query(
-    `UPDATE accounts SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, name, balance`,
+    `UPDATE accounts SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, name, balance, account_type`,
     params
   );
   return rowAccount(rows[0]);
@@ -85,6 +105,163 @@ export async function updateAccount(id, { name, balance }) {
 export async function deleteAccount(id) {
   const { rowCount } = await query('DELETE FROM accounts WHERE id = $1', [id]);
   return rowCount > 0;
+}
+
+// --- Product types (tabla extensible) ---
+export async function getProductTypes() {
+  const { rows } = await query('SELECT id, name, slug, icon FROM product_types ORDER BY id');
+  return rows.map(rowProductType);
+}
+
+export async function getProductType(id) {
+  const { rows } = await query('SELECT id, name, slug, icon FROM product_types WHERE id = $1', [id]);
+  return rowProductType(rows[0]);
+}
+
+// --- Account products (solo para cuentas bancarias) ---
+export async function getAccountProducts(accountId) {
+  const { rows } = await query(
+    `SELECT ap.id, ap.account_id, ap.name, ap.product_type_id, ap.balance, ap.interest_rate_annual,
+            pt.name AS product_type_name, pt.slug AS product_type_slug, pt.icon AS product_type_icon
+     FROM account_products ap
+     JOIN product_types pt ON pt.id = ap.product_type_id
+     WHERE ap.account_id = $1 ORDER BY ap.id`,
+    [accountId]
+  );
+  return rows.map(rowAccountProduct);
+}
+
+export async function getAccountProduct(id) {
+  const { rows } = await query(
+    `SELECT ap.id, ap.account_id, ap.name, ap.product_type_id, ap.balance, ap.interest_rate_annual,
+            pt.name AS product_type_name, pt.slug AS product_type_slug, pt.icon AS product_type_icon
+     FROM account_products ap
+     JOIN product_types pt ON pt.id = ap.product_type_id
+     WHERE ap.id = $1`,
+    [id]
+  );
+  return rowAccountProduct(rows[0]);
+}
+
+export async function createAccountProduct({ accountId, name, productTypeId, balance = 0, interestRateAnnual }) {
+  const typeId = Number(productTypeId);
+  const rate = interestRateAnnual != null && interestRateAnnual !== '' ? Number(interestRateAnnual) : null;
+  await query(
+    'INSERT INTO account_products (account_id, name, product_type_id, balance, interest_rate_annual) VALUES ($1, $2, $3, $4, $5)',
+    [accountId, name.trim(), typeId, Number(balance) || 0, rate]
+  );
+  const { rows } = await query(
+    `SELECT ap.id, ap.account_id, ap.name, ap.product_type_id, ap.balance, ap.interest_rate_annual,
+            pt.name AS product_type_name, pt.slug AS product_type_slug, pt.icon AS product_type_icon
+     FROM account_products ap
+     JOIN product_types pt ON pt.id = ap.product_type_id
+     WHERE ap.account_id = $1 ORDER BY ap.id DESC LIMIT 1`,
+    [accountId]
+  );
+  return rowAccountProduct(rows[0]);
+}
+
+export async function updateAccountProduct(id, { name, productTypeId, balance, interestRateAnnual }) {
+  const updates = [];
+  const params = [];
+  let n = 1;
+  if (name !== undefined) {
+    updates.push(`name = $${n++}`);
+    params.push(String(name).trim());
+  }
+  if (productTypeId !== undefined) {
+    updates.push(`product_type_id = $${n++}`);
+    params.push(Number(productTypeId));
+  }
+  if (balance !== undefined) {
+    updates.push(`balance = $${n++}`);
+    params.push(Number(balance));
+  }
+  if (interestRateAnnual !== undefined) {
+    updates.push(`interest_rate_annual = $${n++}`);
+    params.push(interestRateAnnual != null && interestRateAnnual !== '' ? Number(interestRateAnnual) : null);
+  }
+  if (updates.length === 0) return getAccountProduct(id);
+  params.push(id);
+  await query(`UPDATE account_products SET ${updates.join(', ')} WHERE id = $${n}`, params);
+  return getAccountProduct(id);
+}
+
+export async function deleteAccountProduct(id) {
+  const { rowCount } = await query('DELETE FROM account_products WHERE id = $1', [id]);
+  return rowCount > 0;
+}
+
+/**
+ * Aplica intereses diarios a cuentas que tienen un producto tipo "Interés".
+ * El % es anual; se capitaliza sobre el saldo base de la cuenta:
+ * nuevo_saldo_cuenta = saldo_cuenta * (1 + r/100)^(1/365).
+ * Solo marca "ya aplicado hoy" cuando realmente se aplicó a al menos una cuenta.
+ */
+export async function applyDailyInterest() {
+  const today = new Date().toISOString().slice(0, 10);
+  const settings = await getAppSettings();
+  if (settings.lastInterestRunDate === today) {
+    return { applied: 0, totalInterest: 0, skipped: true, reason: 'already_today' };
+  }
+
+  const interestTypeId = await query(
+    "SELECT id FROM product_types WHERE slug = 'interest' LIMIT 1"
+  );
+  if (!interestTypeId.rows?.length) {
+    return { applied: 0, totalInterest: 0, skipped: false, reason: 'no_accounts' };
+  }
+
+  const { rows: toUpdate } = await query(
+    `SELECT DISTINCT ON (a.id) a.id AS account_id, a.balance,
+            POWER(1 + ap.interest_rate_annual / 100.0, 1.0 / 365.0) AS multiplier
+     FROM accounts a
+     JOIN account_products ap ON ap.account_id = a.id
+     WHERE ap.product_type_id = $1
+       AND ap.interest_rate_annual IS NOT NULL AND ap.interest_rate_annual > 0
+     ORDER BY a.id, ap.id`,
+    [interestTypeId.rows[0].id]
+  );
+
+  const byAccount = new Map();
+  for (const r of toUpdate) {
+    if (!byAccount.has(r.account_id)) {
+      byAccount.set(r.account_id, { balance: Number(r.balance), multiplier: Number(r.multiplier) });
+    }
+  }
+
+  let totalInterest = 0;
+  for (const { balance, multiplier } of byAccount.values()) {
+    totalInterest += balance * (multiplier - 1);
+  }
+
+  if (byAccount.size === 0) {
+    return { applied: 0, totalInterest: 0, skipped: false, reason: 'no_accounts' };
+  }
+
+  const { rowCount } = await query(
+    `UPDATE accounts a
+     SET balance = a.balance * sub.multiplier
+     FROM (
+       SELECT DISTINCT ON (ap.account_id) ap.account_id,
+              POWER(1 + ap.interest_rate_annual / 100.0, 1.0 / 365.0) AS multiplier
+       FROM account_products ap
+       WHERE ap.product_type_id = (SELECT id FROM product_types WHERE slug = 'interest' LIMIT 1)
+         AND ap.interest_rate_annual IS NOT NULL AND ap.interest_rate_annual > 0
+       ORDER BY ap.account_id, ap.id
+     ) sub
+     WHERE a.id = sub.account_id`
+  );
+  const applied = rowCount ?? 0;
+  if (applied > 0) {
+    await updateAppSettings({ lastInterestRunDate: today });
+  }
+  return {
+    applied,
+    totalInterest: Math.round(totalInterest * 100) / 100,
+    skipped: false,
+    reason: applied > 0 ? 'ok' : 'no_accounts',
+  };
 }
 
 // --- Categories ---

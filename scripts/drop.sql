@@ -8,4 +8,6 @@ DROP TABLE IF EXISTS quick_templates;
 DROP TABLE IF EXISTS fixed_expenses;
 DROP TABLE IF EXISTS fixed_incomes;
 DROP TABLE IF EXISTS categories;
+DROP TABLE IF EXISTS account_products;
+DROP TABLE IF EXISTS product_types;
 DROP TABLE IF EXISTS accounts;
