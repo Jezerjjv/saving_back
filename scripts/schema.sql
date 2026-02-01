@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   amount       NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
   account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   type         VARCHAR(20) NOT NULL CHECK (type IN ('expense', 'income')),
-  income_type  VARCHAR(20) CHECK (income_type IN ('quick', 'fixed')),
+  income_type  VARCHAR(20) CHECK (income_type IN ('quick', 'fixed', 'interest')),
   expense_type VARCHAR(20) CHECK (expense_type IN ('quick', 'fixed')),
   date         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -147,6 +147,17 @@ CREATE TABLE IF NOT EXISTS transfers (
 
 CREATE INDEX IF NOT EXISTS idx_transfers_date ON transfers(date);
 
+-- Historial de intereses diarios (solo registro, no son transacciones)
+CREATE TABLE IF NOT EXISTS interest_history (
+  id          SERIAL PRIMARY KEY,
+  date        DATE NOT NULL,
+  account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  amount      NUMERIC(12, 2) NOT NULL CHECK (amount >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_interest_history_date ON interest_history(date);
+CREATE INDEX IF NOT EXISTS idx_interest_history_account ON interest_history(account_id);
+
 -- Configuración de la app (key-value, extensible)
 CREATE TABLE IF NOT EXISTS app_settings (
   key   VARCHAR(255) PRIMARY KEY,
@@ -164,4 +175,5 @@ COMMENT ON TABLE fixed_expenses IS 'Plantillas de gastos recurrentes (ej. gym, C
 COMMENT ON TABLE quick_templates IS 'Plantillas rápidas (ej. Café): si show_in_quick = true aparecen como botón en la pestaña';
 COMMENT ON TABLE periodic_transfers IS 'Plantillas de transferencias recurrentes que se aplican un día del mes';
 COMMENT ON TABLE transfers IS 'Transferencias entre cuentas';
+COMMENT ON TABLE interest_history IS 'Registro de intereses diarios aplicados por cuenta (solo historial)';
 COMMENT ON TABLE app_settings IS 'Preferencias de la app (ej. blurBalance). key en camelCase, value en JSON.';

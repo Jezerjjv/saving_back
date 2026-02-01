@@ -11,6 +11,7 @@ import fixedExpensesRouter from './routes/fixedExpenses.js';
 import quickTemplatesRouter from './routes/quickTemplates.js';
 import transfersRouter from './routes/transfers.js';
 import periodicTransfersRouter from './routes/periodicTransfers.js';
+import interestHistoryRouter from './routes/interestHistory.js';
 import settingsRouter from './routes/settings.js';
 import { startFixedDailyJob } from './jobs.js';
 
@@ -30,6 +31,7 @@ app.use('/api/fixed-expenses', fixedExpensesRouter);
 app.use('/api/quick-templates', quickTemplatesRouter);
 app.use('/api/transfers', transfersRouter);
 app.use('/api/periodic-transfers', periodicTransfersRouter);
+app.use('/api/interest-history', interestHistoryRouter);
 app.use('/api/settings', settingsRouter);
 
 app.get('/api/health', (_, res) => res.json({ ok: true }));

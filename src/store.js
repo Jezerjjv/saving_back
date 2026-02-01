@@ -136,6 +136,61 @@ export async function getProductType(id) {
   return rowProductType(rows[0]);
 }
 
+function slugFromName(name) {
+  const base = (name || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .slice(0, 45) || 'other';
+  return base;
+}
+
+export async function createProductType({ name, icon }) {
+  const iconVal = (icon && String(icon).trim()) || '📦';
+  let slug = slugFromName(name);
+  const { rows: existing } = await query('SELECT slug FROM product_types WHERE slug = $1 OR slug LIKE $2', [slug, slug + '_%']);
+  const used = new Set(existing.map((r) => r.slug));
+  let suffix = 0;
+  while (used.has(slug)) {
+    suffix += 1;
+    slug = slugFromName(name) + '_' + suffix;
+  }
+  const { rows } = await query(
+    'INSERT INTO product_types (name, slug, icon) VALUES ($1, $2, $3) RETURNING id, name, slug, icon',
+    [name.trim(), slug, iconVal]
+  );
+  return rowProductType(rows[0]);
+}
+
+export async function updateProductType(id, { name, icon }) {
+  const updates = [];
+  const params = [];
+  let n = 1;
+  if (name !== undefined) {
+    updates.push(`name = $${n++}`);
+    params.push(name.trim());
+  }
+  if (icon !== undefined) {
+    updates.push(`icon = $${n++}`);
+    params.push((icon && String(icon).trim()) || '📦');
+  }
+  if (updates.length === 0) return getProductType(id);
+  params.push(id);
+  const { rows } = await query(
+    `UPDATE product_types SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, name, slug, icon`,
+    params
+  );
+  return rowProductType(rows[0]);
+}
+
+export async function deleteProductType(id) {
+  const { rowCount } = await query('DELETE FROM product_types WHERE id = $1', [id]);
+  return rowCount > 0;
+}
+
 // --- Account products (solo para cuentas bancarias) ---
 export async function getAccountProducts(accountId) {
   const { rows } = await query(
@@ -271,8 +326,17 @@ export async function applyDailyInterest() {
      WHERE a.id = sub.account_id`
   );
   const applied = rowCount ?? 0;
+
   if (applied > 0) {
     await updateAppSettings({ lastInterestRunDate: today });
+    for (const [accountId, { balance, multiplier }] of byAccount) {
+      const amount = Math.round(balance * (multiplier - 1) * 100) / 100;
+      if (amount < 0.01) continue;
+      await query(
+        `INSERT INTO interest_history (date, account_id, amount) VALUES ($1, $2, $3)`,
+        [today, accountId, amount]
+      );
+    }
   }
   return {
     applied,
@@ -280,6 +344,40 @@ export async function applyDailyInterest() {
     skipped: false,
     reason: applied > 0 ? 'ok' : 'no_accounts',
   };
+}
+
+/** True si hay al menos una cuenta con un producto de tipo interés (slug = 'interest'). */
+export async function hasInterestProduct() {
+  const { rows } = await query(
+    `SELECT 1 FROM account_products ap
+     JOIN product_types pt ON pt.id = ap.product_type_id
+     WHERE pt.slug = 'interest' AND ap.interest_rate_annual IS NOT NULL AND ap.interest_rate_annual > 0
+     LIMIT 1`
+  );
+  return (rows?.length ?? 0) > 0;
+}
+
+/** Historial de intereses: lista { date, accountId, amount } opcionalmente filtrado por año/mes. */
+export async function getInterestHistory(year, month) {
+  let sql = `
+    SELECT ih.date, ih.account_id AS account_id, ih.amount
+    FROM interest_history ih
+  `;
+  const params = [];
+  if (year != null && month != null) {
+    sql += ` WHERE EXTRACT(YEAR FROM ih.date) = $1 AND EXTRACT(MONTH FROM ih.date) = $2`;
+    params.push(year, month);
+  } else if (year != null) {
+    sql += ` WHERE EXTRACT(YEAR FROM ih.date) = $1`;
+    params.push(year);
+  }
+  sql += ' ORDER BY ih.date DESC, ih.account_id';
+  const { rows } = await query(sql, params.length ? params : undefined);
+  return rows.map((r) => ({
+    date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : r.date,
+    accountId: r.account_id,
+    amount: Number(r.amount),
+  }));
 }
 
 // --- Icons (para categorías y productos) ---
