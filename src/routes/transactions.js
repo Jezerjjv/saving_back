@@ -63,6 +63,20 @@ router.get('/expenses-by-category', async (req, res) => {
   }
 });
 
+router.get('/incomes-by-category', async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    const result = await store.getIncomesByCategory(
+      month ? Number(month) : null,
+      year ? Number(year) : null
+    );
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/', async (req, res) => {
   try {
     const { name, categoryId, amount, accountId, type, incomeType, expenseType, date } = req.body;

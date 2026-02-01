@@ -553,6 +553,33 @@ export async function getExpensesByCategory(month, year) {
   }));
 }
 
+/** Ingresos del mes agrupados por categoría (para resumen mensual). */
+export async function getIncomesByCategory(month, year) {
+  const m = month != null ? Number(month) : new Date().getMonth() + 1;
+  const y = year != null ? Number(year) : new Date().getFullYear();
+  const { rows } = await query(
+    `SELECT
+       t.category_id AS category_id,
+       COALESCE(c.name, 'Sin categoría') AS category_name,
+       COALESCE(c.icon, '📁') AS category_icon,
+       SUM(t.amount) AS total
+     FROM transactions t
+     LEFT JOIN categories c ON c.id = t.category_id
+     WHERE t.type = 'income'
+       AND EXTRACT(MONTH FROM t.date AT TIME ZONE 'UTC') = $1
+       AND EXTRACT(YEAR FROM t.date AT TIME ZONE 'UTC') = $2
+     GROUP BY t.category_id, c.name, c.icon
+     ORDER BY total DESC`,
+    [m, y]
+  );
+  return rows.map((r) => ({
+    categoryId: r.category_id,
+    categoryName: r.category_name,
+    categoryIcon: r.category_icon,
+    total: Number(r.total),
+  }));
+}
+
 export async function getMonthlySummary(year) {
   const y = year != null ? Number(year) : new Date().getFullYear();
   const { rows } = await query(
