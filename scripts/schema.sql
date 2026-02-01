@@ -158,6 +158,57 @@ CREATE TABLE IF NOT EXISTS interest_history (
 CREATE INDEX IF NOT EXISTS idx_interest_history_date ON interest_history(date);
 CREATE INDEX IF NOT EXISTS idx_interest_history_account ON interest_history(account_id);
 
+-- Criptomonedas: posiciones, caché de precios (CoinGecko), cierre diario
+CREATE TABLE IF NOT EXISTS crypto_holdings (
+  id              SERIAL PRIMARY KEY,
+  symbol          VARCHAR(30) NOT NULL,
+  amount_invested NUMERIC(18, 8) NOT NULL CHECK (amount_invested >= 0),
+  price_bought    NUMERIC(18, 8) NOT NULL CHECK (price_bought > 0),
+  currency        VARCHAR(3) NOT NULL DEFAULT 'EUR' CHECK (currency IN ('EUR', 'USD')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS crypto_price_cache (
+  symbol    VARCHAR(30) PRIMARY KEY,
+  price_eur NUMERIC(18, 8) NOT NULL,
+  price_usd NUMERIC(18, 8) NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS crypto_daily_close (
+  id              SERIAL PRIMARY KEY,
+  date            DATE NOT NULL UNIQUE,
+  total_value_eur NUMERIC(18, 4) NOT NULL,
+  total_value_usd NUMERIC(18, 4) NOT NULL,
+  gain_loss_eur   NUMERIC(18, 4) NOT NULL,
+  gain_loss_usd   NUMERIC(18, 4) NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_crypto_daily_close_date ON crypto_daily_close(date);
+CREATE TABLE IF NOT EXISTS crypto_holding_daily (
+  id             SERIAL PRIMARY KEY,
+  holding_id     INTEGER NOT NULL REFERENCES crypto_holdings(id) ON DELETE CASCADE,
+  date           DATE NOT NULL,
+  gain_loss_eur  NUMERIC(18, 4) NOT NULL,
+  gain_loss_usd  NUMERIC(18, 4) NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (holding_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_crypto_holding_daily_holding_date ON crypto_holding_daily(holding_id, date);
+
+CREATE TABLE IF NOT EXISTS stock_holdings (
+  id              SERIAL PRIMARY KEY,
+  symbol          VARCHAR(20) NOT NULL,
+  amount_invested NUMERIC(18, 8) NOT NULL CHECK (amount_invested >= 0),
+  price_bought    NUMERIC(18, 8) NOT NULL CHECK (price_bought > 0),
+  currency        VARCHAR(10) NOT NULL DEFAULT 'USD' CHECK (currency IN ('EUR', 'USD', 'USDT')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS stock_price_cache (
+  symbol     VARCHAR(20) PRIMARY KEY,
+  price_usd  NUMERIC(18, 8) NOT NULL,
+  price_eur  NUMERIC(18, 8) NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Configuración de la app (key-value, extensible)
 CREATE TABLE IF NOT EXISTS app_settings (
   key   VARCHAR(255) PRIMARY KEY,

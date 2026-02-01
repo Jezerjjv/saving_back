@@ -42,11 +42,30 @@ export async function runFixedDailyJob() {
     }
     if (interest.skipped && interest.reason === 'already_today') {
       console.log(`[Job] Intereses diarios: ya aplicados hoy (se ejecutan 1 vez al día).`);
-    } else if (interest.applied > 0) {
+    } else     if (interest.applied > 0) {
       const amount = typeof interest.totalInterest === 'number' ? interest.totalInterest.toFixed(2) : '0.00';
       console.log(`[Job] Intereses diarios: +${amount} € aplicados a ${interest.applied} cuenta(s).`);
     } else {
       console.log(`[Job] Intereses diarios: 0 cuentas con producto Interés (añade un producto tipo Interés con % anual).`);
+    }
+
+    // Cierre diario cripto: a las 00:00 (en la primera pasada del día) registramos el cierre del día anterior
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+    if (hour === 0 && minute < 30) {
+      const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().slice(0, 10);
+      const existing = await store.getCryptoDailyCloseByDate(yesterdayStr);
+      if (!existing) {
+        try {
+          const closeResult = await store.runCryptoDailyClose();
+          if (closeResult.inserted) {
+            console.log(`[Job] Cierre cripto: ${yesterdayStr} — valor EUR ${closeResult.totalEur?.toFixed(2) ?? '—'}, ganancia/pérdida EUR ${closeResult.gainLossEur?.toFixed(2) ?? '—'}.`);
+          }
+        } catch (cryptoErr) {
+          console.error('[Job] Error cierre diario cripto:', cryptoErr);
+        }
+      }
     }
   } catch (err) {
     console.error('[Job] Error aplicando fijos/intereses:', err);

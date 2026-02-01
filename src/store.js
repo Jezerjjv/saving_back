@@ -1168,3 +1168,399 @@ export async function updateAppSettings(patch) {
   }
   return getAppSettings();
 }
+
+// --- Crypto: holdings, price cache (CoinGecko), daily close ---
+const COINGECKO_BASE = 'https://api.coingecko.com/api/v3';
+const COINGECKO_MIN_MS = 60 * 1000; // no llamar más de 1 vez por minuto para respetar rate limit
+
+function rowCryptoHolding(r) {
+  if (!r) return null;
+  const amountInvested = Number(r.amount_invested);
+  const priceBought = Number(r.price_bought);
+  return {
+    id: r.id,
+    symbol: r.symbol,
+    amountInvested,
+    priceBought,
+    amountCoins: priceBought > 0 ? amountInvested / priceBought : 0,
+    currency: r.currency || 'EUR',
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+  };
+}
+
+export async function getCryptoHoldings() {
+  const { rows } = await query('SELECT id, symbol, amount_invested, price_bought, currency, created_at FROM crypto_holdings ORDER BY id');
+  return rows.map(rowCryptoHolding);
+}
+
+export async function getCryptoHolding(id) {
+  const { rows } = await query('SELECT id, symbol, amount_invested, price_bought, currency, created_at FROM crypto_holdings WHERE id = $1', [id]);
+  return rowCryptoHolding(rows[0]);
+}
+
+function cryptoCurrency(currency) {
+  if (currency === 'USD' || currency === 'USDT') return currency;
+  return 'EUR';
+}
+
+export async function createCryptoHolding({ symbol, amountInvested, priceBought, currency = 'EUR' }) {
+  const curr = cryptoCurrency(currency);
+  const { rows } = await query(
+    'INSERT INTO crypto_holdings (symbol, amount_invested, price_bought, currency) VALUES ($1, $2, $3, $4) RETURNING id, symbol, amount_invested, price_bought, currency, created_at',
+    [String(symbol).trim().toLowerCase(), Number(amountInvested) || 0, Number(priceBought) || 0, curr]
+  );
+  return rowCryptoHolding(rows[0]);
+}
+
+export async function updateCryptoHolding(id, { symbol, amountInvested, priceBought, currency }) {
+  const updates = [];
+  const params = [];
+  let n = 1;
+  if (symbol !== undefined) {
+    updates.push(`symbol = $${n++}`);
+    params.push(String(symbol).trim().toLowerCase());
+  }
+  if (amountInvested !== undefined) {
+    updates.push(`amount_invested = $${n++}`);
+    params.push(Number(amountInvested) || 0);
+  }
+  if (priceBought !== undefined) {
+    updates.push(`price_bought = $${n++}`);
+    params.push(Number(priceBought) || 0);
+  }
+  if (currency !== undefined) {
+    updates.push(`currency = $${n++}`);
+    params.push(cryptoCurrency(currency));
+  }
+  if (updates.length === 0) return getCryptoHolding(id);
+  params.push(id);
+  const { rows } = await query(
+    `UPDATE crypto_holdings SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, symbol, amount_invested, price_bought, currency, created_at`,
+    params
+  );
+  return rowCryptoHolding(rows[0]);
+}
+
+export async function deleteCryptoHolding(id) {
+  const { rowCount } = await query('DELETE FROM crypto_holdings WHERE id = $1', [id]);
+  return rowCount > 0;
+}
+
+export async function getCryptoPriceCache(symbols) {
+  if (!symbols || symbols.length === 0) return {};
+  const { rows } = await query(
+    'SELECT symbol, price_eur, price_usd, updated_at FROM crypto_price_cache WHERE symbol = ANY($1)',
+    [symbols]
+  );
+  const out = {};
+  for (const r of rows) {
+    out[r.symbol] = {
+      priceEur: Number(r.price_eur),
+      priceUsd: Number(r.price_usd),
+      updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : r.updated_at,
+    };
+  }
+  return out;
+}
+
+export async function saveCryptoPriceCache(symbol, priceEur, priceUsd) {
+  await query(
+    `INSERT INTO crypto_price_cache (symbol, price_eur, price_usd, updated_at) VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (symbol) DO UPDATE SET price_eur = $2, price_usd = $3, updated_at = NOW()`,
+    [symbol, Number(priceEur), Number(priceUsd)]
+  );
+}
+
+/** Llama a CoinGecko; si rate limit (429) o error, devuelve null y usamos caché. */
+export async function fetchCryptoPricesFromApi(symbols) {
+  if (!symbols || symbols.length === 0) return {};
+  const ids = [...new Set(symbols.map((s) => String(s).trim().toLowerCase()))];
+  const url = `${COINGECKO_BASE}/simple/price?ids=${ids.join(',')}&vs_currencies=eur,usd`;
+  try {
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (res.status === 429) return null;
+    if (!res.ok) return null;
+    const data = await res.json();
+    const out = {};
+    for (const [id, prices] of Object.entries(data)) {
+      if (prices && typeof prices.eur === 'number' && typeof prices.usd === 'number') {
+        out[id] = { priceEur: prices.eur, priceUsd: prices.usd };
+      }
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** Obtiene precios: intenta API y actualiza caché; si falla, devuelve caché. */
+export async function getCryptoPrices(symbols) {
+  if (!symbols || symbols.length === 0) return {};
+  const fromApi = await fetchCryptoPricesFromApi(symbols);
+  if (fromApi && Object.keys(fromApi).length > 0) {
+    for (const [sym, p] of Object.entries(fromApi)) {
+      await saveCryptoPriceCache(sym, p.priceEur, p.priceUsd);
+    }
+    return fromApi;
+  }
+  const fromCache = await getCryptoPriceCache(symbols);
+  return Object.fromEntries(
+    Object.entries(fromCache).map(([k, v]) => [k, { priceEur: v.priceEur, priceUsd: v.priceUsd }])
+  );
+}
+
+/** Cierre diario: se ejecuta a 00:00. Inserta fila con la fecha del día que acaba de terminar (ayer). */
+export async function runCryptoDailyClose() {
+  const holdings = await getCryptoHoldings();
+  if (holdings.length === 0) return { inserted: false, reason: 'no_holdings' };
+  const symbols = [...new Set(holdings.map((h) => h.symbol))];
+  const prices = await getCryptoPrices(symbols);
+  const settings = await getAppSettings();
+  const rate = Number(settings.exchangeRateUsdToEur) || 0.92;
+
+  let totalEur = 0;
+  let totalUsd = 0;
+  for (const h of holdings) {
+    const p = prices[h.symbol];
+    if (p) {
+      const coins = h.amountCoins;
+      totalEur += coins * p.priceEur;
+      totalUsd += coins * p.priceUsd;
+    }
+  }
+  const now = new Date();
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const dateStr = yesterday.toISOString().slice(0, 10);
+  const prev = await query(
+    'SELECT total_value_eur, total_value_usd FROM crypto_daily_close WHERE date < $1 ORDER BY date DESC LIMIT 1',
+    [dateStr]
+  );
+  const prevEur = prev.rows[0] ? Number(prev.rows[0].total_value_eur) : 0;
+  const prevUsd = prev.rows[0] ? Number(prev.rows[0].total_value_usd) : 0;
+  const gainLossEur = totalEur - prevEur;
+  const gainLossUsd = totalUsd - prevUsd;
+  await query(
+    `INSERT INTO crypto_daily_close (date, total_value_eur, total_value_usd, gain_loss_eur, gain_loss_usd)
+     VALUES ($1, $2, $3, $4, $5) ON CONFLICT (date) DO UPDATE SET
+     total_value_eur = $2, total_value_usd = $3, gain_loss_eur = $4, gain_loss_usd = $5`,
+    [dateStr, totalEur, totalUsd, gainLossEur, gainLossUsd]
+  );
+
+  for (const h of holdings) {
+    const p = prices[h.symbol];
+    const currentEur = p ? h.amountCoins * p.priceEur : 0;
+    const currentUsd = p ? h.amountCoins * p.priceUsd : 0;
+    const investedEur = h.currency === 'EUR' ? h.amountInvested : h.amountInvested * rate;
+    const investedUsd = h.currency === 'EUR' ? h.amountInvested / rate : h.amountInvested;
+    const glEur = currentEur - investedEur;
+    const glUsd = currentUsd - investedUsd;
+    await query(
+      `INSERT INTO crypto_holding_daily (holding_id, date, gain_loss_eur, gain_loss_usd)
+       VALUES ($1, $2, $3, $4) ON CONFLICT (holding_id, date) DO UPDATE SET gain_loss_eur = $3, gain_loss_usd = $4`,
+      [h.id, dateStr, glEur, glUsd]
+    );
+  }
+
+  return { inserted: true, date: dateStr, totalEur, totalUsd, gainLossEur, gainLossUsd };
+}
+
+export async function getCryptoDailyCloseByDate(dateStr) {
+  const { rows } = await query('SELECT date FROM crypto_daily_close WHERE date = $1', [dateStr]);
+  return rows[0] || null;
+}
+
+/** Historial diario de G/P por holding. Devuelve cierres ordenados por fecha DESC; G/P del día = cierre - cierre anterior. */
+export async function getCryptoHoldingDailyHistory(holdingId, year, month) {
+  let sql = 'SELECT date, gain_loss_eur, gain_loss_usd FROM crypto_holding_daily WHERE holding_id = $1';
+  const params = [holdingId];
+  if (year != null && month != null) {
+    sql += ' AND EXTRACT(YEAR FROM date) = $2 AND EXTRACT(MONTH FROM date) = $3';
+    params.push(year, month);
+  } else if (year != null) {
+    sql += ' AND EXTRACT(YEAR FROM date) = $2';
+    params.push(year);
+  }
+  sql += ' ORDER BY date ASC';
+  const { rows } = await query(sql, params.length > 1 ? params : [holdingId]);
+  const list = rows.map((r) => ({
+    date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : r.date,
+    gainLossEur: Number(r.gain_loss_eur),
+    gainLossUsd: Number(r.gain_loss_usd),
+  }));
+  for (let i = list.length - 1; i >= 0; i--) {
+    const prev = i > 0 ? list[i - 1] : null;
+    list[i].dailyEur = prev != null ? list[i].gainLossEur - prev.gainLossEur : list[i].gainLossEur;
+    list[i].dailyUsd = prev != null ? list[i].gainLossUsd - prev.gainLossUsd : list[i].gainLossUsd;
+  }
+  return list.reverse();
+}
+
+export async function getCryptoDailyCloseHistory(year, month) {
+  let sql = 'SELECT date, total_value_eur, total_value_usd, gain_loss_eur, gain_loss_usd FROM crypto_daily_close';
+  const params = [];
+  if (year != null && month != null) {
+    sql += ' WHERE EXTRACT(YEAR FROM date) = $1 AND EXTRACT(MONTH FROM date) = $2';
+    params.push(year, month);
+  } else if (year != null) {
+    sql += ' WHERE EXTRACT(YEAR FROM date) = $1';
+    params.push(year);
+  }
+  sql += ' ORDER BY date DESC';
+  const { rows } = await query(sql, params.length ? params : undefined);
+  return rows.map((r) => ({
+    date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : r.date,
+    totalValueEur: Number(r.total_value_eur),
+    totalValueUsd: Number(r.total_value_usd),
+    gainLossEur: Number(r.gain_loss_eur),
+    gainLossUsd: Number(r.gain_loss_usd),
+  }));
+}
+
+/** True si hay al menos una posición en crypto (para mostrar menú). */
+export async function hasCryptoHoldings() {
+  const { rows } = await query('SELECT 1 FROM crypto_holdings LIMIT 1');
+  return (rows?.length ?? 0) > 0;
+}
+
+// --- Stocks / Acciones (ETFs, acciones; precios vía Yahoo Finance chart API) ---
+
+function rowStockHolding(r) {
+  if (!r) return null;
+  const amountInvested = Number(r.amount_invested);
+  const priceBought = Number(r.price_bought);
+  return {
+    id: r.id,
+    symbol: String(r.symbol).toUpperCase(),
+    amountInvested,
+    priceBought,
+    amountShares: priceBought > 0 ? amountInvested / priceBought : 0,
+    currency: r.currency || 'USD',
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+  };
+}
+
+export async function getStockHoldings() {
+  const { rows } = await query('SELECT id, symbol, amount_invested, price_bought, currency, created_at FROM stock_holdings ORDER BY id');
+  return rows.map(rowStockHolding);
+}
+
+export async function getStockHolding(id) {
+  const { rows } = await query('SELECT id, symbol, amount_invested, price_bought, currency, created_at FROM stock_holdings WHERE id = $1', [id]);
+  return rowStockHolding(rows[0]);
+}
+
+function stockCurrency(currency) {
+  if (currency === 'USD' || currency === 'USDT' || currency === 'EUR') return currency;
+  return 'USD';
+}
+
+export async function createStockHolding({ symbol, amountInvested, priceBought, currency = 'USD' }) {
+  const curr = stockCurrency(currency);
+  const { rows } = await query(
+    'INSERT INTO stock_holdings (symbol, amount_invested, price_bought, currency) VALUES ($1, $2, $3, $4) RETURNING id, symbol, amount_invested, price_bought, currency, created_at',
+    [String(symbol).trim().toUpperCase(), Number(amountInvested) || 0, Number(priceBought) || 0, curr]
+  );
+  return rowStockHolding(rows[0]);
+}
+
+export async function updateStockHolding(id, { symbol, amountInvested, priceBought, currency }) {
+  const updates = [];
+  const params = [];
+  let n = 1;
+  if (symbol !== undefined) {
+    updates.push(`symbol = $${n++}`);
+    params.push(String(symbol).trim().toUpperCase());
+  }
+  if (amountInvested !== undefined) {
+    updates.push(`amount_invested = $${n++}`);
+    params.push(Number(amountInvested) || 0);
+  }
+  if (priceBought !== undefined) {
+    updates.push(`price_bought = $${n++}`);
+    params.push(Number(priceBought) || 0);
+  }
+  if (currency !== undefined) {
+    updates.push(`currency = $${n++}`);
+    params.push(stockCurrency(currency));
+  }
+  if (updates.length === 0) return getStockHolding(id);
+  params.push(id);
+  const { rows } = await query(
+    `UPDATE stock_holdings SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, symbol, amount_invested, price_bought, currency, created_at`,
+    params
+  );
+  return rowStockHolding(rows[0]);
+}
+
+export async function deleteStockHolding(id) {
+  const { rowCount } = await query('DELETE FROM stock_holdings WHERE id = $1', [id]);
+  return rowCount > 0;
+}
+
+export async function getStockPriceCache(symbols) {
+  if (!symbols || symbols.length === 0) return {};
+  const { rows } = await query(
+    'SELECT symbol, price_usd, price_eur, updated_at FROM stock_price_cache WHERE symbol = ANY($1)',
+    [symbols]
+  );
+  const out = {};
+  for (const r of rows) {
+    out[r.symbol] = {
+      priceUsd: Number(r.price_usd),
+      priceEur: Number(r.price_eur),
+      updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : r.updated_at,
+    };
+  }
+  return out;
+}
+
+export async function saveStockPriceCache(symbol, priceUsd, priceEur) {
+  await query(
+    `INSERT INTO stock_price_cache (symbol, price_usd, price_eur, updated_at) VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (symbol) DO UPDATE SET price_usd = $2, price_eur = $3, updated_at = NOW()`,
+    [symbol, Number(priceUsd), Number(priceEur)]
+  );
+}
+
+/** Yahoo Finance chart API (precio actual en USD). Sin API key. */
+export async function fetchStockPriceFromApi(symbol) {
+  const sym = String(symbol).trim().toUpperCase();
+  if (!sym) return null;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`;
+  try {
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const result = data?.chart?.result?.[0];
+    const price = result?.meta?.regularMarketPrice ?? result?.meta?.previousClose ?? null;
+    if (price == null || typeof price !== 'number') return null;
+    return { priceUsd: price, priceEur: price * 0.92 };
+  } catch {
+    return null;
+  }
+}
+
+export async function getStockPrices(symbols) {
+  if (!symbols || symbols.length === 0) return {};
+  const unique = [...new Set(symbols.map((s) => String(s).trim().toUpperCase()).filter(Boolean))];
+  const out = {};
+  const settings = await getAppSettings();
+  const rate = Number(settings.exchangeRateUsdToEur) || 0.92;
+  for (const sym of unique) {
+    const fromApi = await fetchStockPriceFromApi(sym);
+    if (fromApi) {
+      const priceEur = fromApi.priceUsd * rate;
+      await saveStockPriceCache(sym, fromApi.priceUsd, priceEur);
+      out[sym] = { priceUsd: fromApi.priceUsd, priceEur };
+    } else {
+      const cache = await getStockPriceCache([sym]);
+      if (cache[sym]) out[sym] = { priceUsd: cache[sym].priceUsd, priceEur: cache[sym].priceEur };
+    }
+  }
+  return out;
+}
+
+export async function hasStockHoldings() {
+  const { rows } = await query('SELECT 1 FROM stock_holdings LIMIT 1');
+  return (rows?.length ?? 0) > 0;
+}
