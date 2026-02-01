@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import authRouter from './routes/auth.js';
 import accountsRouter from './routes/accounts.js';
 import productTypesRouter from './routes/productTypes.js';
 import iconsRouter from './routes/icons.js';
@@ -15,6 +16,7 @@ import interestHistoryRouter from './routes/interestHistory.js';
 import cryptoRouter from './routes/crypto.js';
 import stocksRouter from './routes/stocks.js';
 import settingsRouter from './routes/settings.js';
+import { requireAuth } from './middleware/auth.js';
 import { startFixedDailyJob } from './jobs.js';
 
 const app = express();
@@ -23,6 +25,11 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
+app.get('/api/health', (_, res) => res.json({ ok: true }));
+app.use('/api/auth', authRouter);
+
+// Rutas protegidas: requieren token JWT
+app.use(requireAuth);
 app.use('/api/accounts', accountsRouter);
 app.use('/api/product-types', productTypesRouter);
 app.use('/api/icons', iconsRouter);
@@ -37,8 +44,6 @@ app.use('/api/interest-history', interestHistoryRouter);
 app.use('/api/crypto', cryptoRouter);
 app.use('/api/stocks', stocksRouter);
 app.use('/api/settings', settingsRouter);
-
-app.get('/api/health', (_, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => {
   console.log(`Servidor en http://localhost:${PORT}`);

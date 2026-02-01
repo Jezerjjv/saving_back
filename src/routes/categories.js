@@ -5,7 +5,7 @@ const router = Router();
 
 router.get('/', async (req, res) => {
   try {
-    const categories = await store.getCategories();
+    const categories = await store.getCategories(req.userId);
     res.json(categories);
   } catch (err) {
     console.error(err);
@@ -17,7 +17,7 @@ router.post('/', async (req, res) => {
   try {
     const { name, icon = '📁' } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'El nombre es obligatorio' });
-    const category = await store.createCategory({ name: name.trim(), icon });
+    const category = await store.createCategory(req.userId, { name: name.trim(), icon });
     res.status(201).json(category);
   } catch (err) {
     console.error(err);
@@ -40,10 +40,10 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const existing = await store.getCategory(id);
+    const existing = await store.getCategory(req.userId, id);
     if (!existing) return res.status(404).json({ error: 'Categoría no encontrada' });
     const { name, icon } = req.body;
-    const category = await store.updateCategory(id, { name, icon });
+    const category = await store.updateCategory(req.userId, id, { name, icon });
     res.json(category);
   } catch (err) {
     console.error(err);
@@ -54,7 +54,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const deleted = await store.deleteCategory(id);
+    const deleted = await store.deleteCategory(req.userId, id);
     if (!deleted) return res.status(404).json({ error: 'Categoría no encontrada' });
     res.status(204).send();
   } catch (err) {

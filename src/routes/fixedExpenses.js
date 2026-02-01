@@ -5,7 +5,7 @@ const router = Router();
 
 router.get('/', async (req, res) => {
   try {
-    const list = await store.getFixedExpenses();
+    const list = await store.getFixedExpenses(req.userId);
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -17,11 +17,11 @@ router.post('/', async (req, res) => {
   try {
     const { name, categoryId, amount, accountId, dayOfMonth } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'El nombre es obligatorio' });
-    const acc = await store.getAccount(Number(accountId));
+    const acc = await store.getAccount(req.userId, Number(accountId));
     if (!acc) return res.status(400).json({ error: 'Cuenta no encontrada' });
     const amt = Number(amount) || 0;
     if (amt <= 0) return res.status(400).json({ error: 'El monto debe ser positivo' });
-    const fixed = await store.createFixedExpense({
+    const fixed = await store.createFixedExpense(req.userId, {
       name: name.trim(),
       categoryId: categoryId != null ? Number(categoryId) : null,
       amount: amt,
@@ -58,7 +58,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const deleted = await store.deleteFixedExpense(id);
+    const deleted = await store.deleteFixedExpense(req.userId, id);
     if (!deleted) return res.status(404).json({ error: 'Gasto fijo no encontrado' });
     res.status(204).send();
   } catch (err) {
@@ -74,7 +74,7 @@ router.post('/apply-month', async (req, res) => {
     const m = month != null ? Number(month) : now.getMonth() + 1;
     const y = year != null ? Number(year) : now.getFullYear();
     const dayFilter = day != null ? Number(day) : null;
-    const created = await store.applyFixedExpensesForMonth(m, y, dayFilter);
+    const created = await store.applyFixedExpensesForMonth(req.userId, m, y, dayFilter);
     res.json({ applied: created.length, transactions: created });
   } catch (err) {
     console.error(err);
@@ -85,10 +85,10 @@ router.post('/apply-month', async (req, res) => {
 router.post('/:id/apply', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const existing = await store.getFixedExpense(id);
+    const existing = await store.getFixedExpense(req.userId, id);
     if (!existing) return res.status(404).json({ error: 'Gasto fijo no encontrado' });
     const { month, year } = req.body;
-    const tx = await store.applySingleFixedExpense(id, month, year);
+    const tx = await store.applySingleFixedExpense(req.userId, id, month, year);
     if (!tx) return res.status(400).json({ error: 'Este gasto fijo ya está aplicado en el mes indicado' });
     res.json({ applied: 1, transaction: tx });
   } catch (err) {

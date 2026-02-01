@@ -5,7 +5,7 @@ const router = Router();
 
 router.get('/holdings', async (req, res) => {
   try {
-    const list = await store.getCryptoHoldings();
+    const list = await store.getCryptoHoldings(req.userId);
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -16,7 +16,7 @@ router.get('/holdings', async (req, res) => {
 router.get('/holdings/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const item = await store.getCryptoHolding(id);
+    const item = await store.getCryptoHolding(req.userId, id);
     if (!item) return res.status(404).json({ error: 'Posición no encontrada' });
     res.json(item);
   } catch (err) {
@@ -31,7 +31,7 @@ router.post('/holdings', async (req, res) => {
     if (!symbol || !String(symbol).trim()) {
       return res.status(400).json({ error: 'symbol es obligatorio' });
     }
-    const item = await store.createCryptoHolding({
+    const item = await store.createCryptoHolding(req.userId, {
       symbol: String(symbol).trim().toLowerCase(),
       amountInvested: Number(amountInvested) || 0,
       priceBought: Number(priceBought) || 0,
@@ -48,7 +48,7 @@ router.put('/holdings/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { symbol, amountInvested, priceBought, currency } = req.body;
-    const item = await store.updateCryptoHolding(id, {
+    const item = await store.updateCryptoHolding(req.userId, id, {
       symbol: symbol != null ? String(symbol).trim().toLowerCase() : undefined,
       amountInvested: amountInvested != null ? Number(amountInvested) : undefined,
       priceBought: priceBought != null ? Number(priceBought) : undefined,
@@ -93,7 +93,7 @@ router.get('/daily-close', async (req, res) => {
     const { year, month } = req.query;
     const y = year != null ? Number(year) : null;
     const m = month != null ? Number(month) : null;
-    const history = await store.getCryptoDailyCloseHistory(y, m);
+    const history = await store.getCryptoDailyCloseHistory(req.userId, y, m);
     res.json(history);
   } catch (err) {
     console.error(err);
@@ -105,7 +105,7 @@ router.get('/daily-close', async (req, res) => {
 router.get('/holdings/:id/daily-history', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const holding = await store.getCryptoHolding(id);
+    const holding = await store.getCryptoHolding(req.userId, id);
     if (!holding) return res.status(404).json({ error: 'Posición no encontrada' });
     const { year, month } = req.query;
     const y = year != null ? Number(year) : null;
@@ -121,7 +121,7 @@ router.get('/holdings/:id/daily-history', async (req, res) => {
 /** Para el menú: ¿hay posiciones? */
 router.get('/eligible', async (req, res) => {
   try {
-    const eligible = await store.hasCryptoHoldings();
+    const eligible = await store.hasCryptoHoldings(req.userId);
     res.json({ eligible });
   } catch (err) {
     console.error(err);

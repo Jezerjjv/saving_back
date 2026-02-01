@@ -5,7 +5,7 @@ const router = Router();
 
 router.get('/holdings', async (req, res) => {
   try {
-    const list = await store.getStockHoldings();
+    const list = await store.getStockHoldings(req.userId);
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -31,7 +31,7 @@ router.post('/holdings', async (req, res) => {
     if (!symbol || !String(symbol).trim()) {
       return res.status(400).json({ error: 'symbol es obligatorio' });
     }
-    const item = await store.createStockHolding({
+    const item = await store.createStockHolding(req.userId, {
       symbol: String(symbol).trim().toUpperCase(),
       amountInvested: Number(amountInvested) || 0,
       priceBought: Number(priceBought) || 0,
@@ -48,7 +48,7 @@ router.put('/holdings/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { symbol, amountInvested, priceBought, currency } = req.body;
-    const item = await store.updateStockHolding(id, {
+    const item = await store.updateStockHolding(req.userId, id, {
       symbol: symbol != null ? String(symbol).trim().toUpperCase() : undefined,
       amountInvested: amountInvested != null ? Number(amountInvested) : undefined,
       priceBought: priceBought != null ? Number(priceBought) : undefined,
@@ -78,7 +78,7 @@ router.get('/prices', async (req, res) => {
   try {
     const symbolsParam = req.query.symbols;
     const symbols = symbolsParam ? String(symbolsParam).split(',').map((s) => s.trim()).filter(Boolean) : [];
-    const prices = await store.getStockPrices(symbols);
+    const prices = await store.getStockPrices(symbols, req.userId);
     res.json(prices);
   } catch (err) {
     console.error(err);
@@ -88,7 +88,7 @@ router.get('/prices', async (req, res) => {
 
 router.get('/eligible', async (req, res) => {
   try {
-    const eligible = await store.hasStockHoldings();
+    const eligible = await store.hasStockHoldings(req.userId);
     res.json({ eligible });
   } catch (err) {
     console.error(err);

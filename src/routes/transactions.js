@@ -5,7 +5,7 @@ const router = Router();
 
 router.get('/', async (req, res) => {
   try {
-    const transactions = await store.getTransactions();
+    const transactions = await store.getTransactions(req.userId);
     res.json(transactions);
   } catch (err) {
     console.error(err);
@@ -17,6 +17,7 @@ router.get('/grouped', async (req, res) => {
   try {
     const { month, year } = req.query;
     const result = await store.getTransactionsGrouped(
+      req.userId,
       month ? Number(month) : null,
       year ? Number(year) : null
     );
@@ -30,7 +31,7 @@ router.get('/grouped', async (req, res) => {
 router.get('/monthly-summary', async (req, res) => {
   try {
     const { year } = req.query;
-    const result = await store.getMonthlySummary(year ? Number(year) : null);
+    const result = await store.getMonthlySummary(req.userId, year ? Number(year) : null);
     res.json(result);
   } catch (err) {
     console.error(err);
@@ -53,6 +54,7 @@ router.get('/expenses-by-category', async (req, res) => {
   try {
     const { month, year } = req.query;
     const result = await store.getExpensesByCategory(
+      req.userId,
       month ? Number(month) : null,
       year ? Number(year) : null
     );
@@ -67,6 +69,7 @@ router.get('/incomes-by-category', async (req, res) => {
   try {
     const { month, year } = req.query;
     const result = await store.getIncomesByCategory(
+      req.userId,
       month ? Number(month) : null,
       year ? Number(year) : null
     );
@@ -82,11 +85,11 @@ router.post('/', async (req, res) => {
     const { name, categoryId, amount, accountId, type, incomeType, expenseType, date } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'El nombre es obligatorio' });
     if (type !== 'expense' && type !== 'income') return res.status(400).json({ error: 'type debe ser expense o income' });
-    const acc = await store.getAccount(Number(accountId));
+    const acc = await store.getAccount(req.userId, Number(accountId));
     if (!acc) return res.status(400).json({ error: 'Cuenta no encontrada' });
     const amt = Number(amount) || 0;
     if (amt <= 0) return res.status(400).json({ error: 'El monto debe ser positivo' });
-    const tx = await store.createTransaction({
+    const tx = await store.createTransaction(req.userId, {
       name: name.trim(),
       categoryId: categoryId != null ? Number(categoryId) : null,
       amount: amt,
@@ -118,13 +121,13 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const old = await store.getTransaction(id);
+    const old = await store.getTransaction(req.userId, id);
     if (!old) return res.status(404).json({ error: 'Transacción no encontrada' });
     const { name, categoryId, amount, accountId, type, incomeType, expenseType, date } = req.body;
     const newAccountId = accountId !== undefined ? Number(accountId) : old.accountId;
-    const newAcc = await store.getAccount(newAccountId);
+    const newAcc = await store.getAccount(req.userId, newAccountId);
     if (!newAcc) return res.status(400).json({ error: 'Cuenta no encontrada' });
-    const tx = await store.updateTransaction(id, {
+    const tx = await store.updateTransaction(req.userId, id, {
       name,
       categoryId: categoryId !== undefined ? (categoryId == null ? null : Number(categoryId)) : undefined,
       amount,
@@ -145,7 +148,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const deleted = await store.deleteTransaction(id);
+    const deleted = await store.deleteTransaction(req.userId, id);
     if (!deleted) return res.status(404).json({ error: 'Transacción no encontrada' });
     res.status(204).send();
   } catch (err) {

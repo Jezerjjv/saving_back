@@ -9,8 +9,8 @@ router.get('/', async (req, res) => {
     const y = year != null ? Number(year) : null;
     const m = month != null ? Number(month) : null;
     const [eligible, history] = await Promise.all([
-      store.hasInterestProduct(),
-      store.getInterestHistory(y, m),
+      store.hasInterestProduct(req.userId),
+      store.getInterestHistory(req.userId, y, m),
     ]);
     res.json({ eligible, history });
   } catch (err) {

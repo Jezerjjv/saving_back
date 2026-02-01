@@ -5,7 +5,7 @@ const router = Router();
 
 router.get('/', async (req, res) => {
   try {
-    const list = await store.getPeriodicTransfers();
+    const list = await store.getPeriodicTransfers(req.userId);
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -41,13 +41,13 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const existing = await store.getPeriodicTransfer(id);
+    const existing = await store.getPeriodicTransfer(req.userId, id);
     if (!existing) return res.status(404).json({ error: 'Transferencia periódica no encontrada' });
     const { fromAccountId, toAccountId, amount, description, dayOfMonth } = req.body;
     if (fromAccountId !== undefined && toAccountId !== undefined && Number(fromAccountId) === Number(toAccountId)) {
       return res.status(400).json({ error: 'Las cuentas deben ser distintas' });
     }
-    const pt = await store.updatePeriodicTransfer(id, {
+    const pt = await store.updatePeriodicTransfer(req.userId, id, {
       fromAccountId: fromAccountId !== undefined ? Number(fromAccountId) : undefined,
       toAccountId: toAccountId !== undefined ? Number(toAccountId) : undefined,
       amount: amount !== undefined ? Number(amount) : undefined,
@@ -64,7 +64,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const deleted = await store.deletePeriodicTransfer(id);
+    const deleted = await store.deletePeriodicTransfer(req.userId, id);
     if (!deleted) return res.status(404).json({ error: 'Transferencia periódica no encontrada' });
     res.status(204).send();
   } catch (err) {
@@ -90,13 +90,13 @@ router.post('/apply-month', async (req, res) => {
 router.post('/:id/apply', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const existing = await store.getPeriodicTransfer(id);
+    const existing = await store.getPeriodicTransfer(req.userId, id);
     if (!existing) return res.status(404).json({ error: 'Transferencia periódica no encontrada' });
     const { month, year } = req.body;
     const now = new Date();
     const m = month != null ? Number(month) : now.getMonth() + 1;
     const y = year != null ? Number(year) : now.getFullYear();
-    const t = await store.applySinglePeriodicTransfer(id, m, y);
+    const t = await store.applySinglePeriodicTransfer(req.userId, id, m, y);
     if (!t) return res.status(400).json({ error: 'Esta transferencia periódica ya está aplicada en el mes indicado' });
     res.json({ applied: 1, transfer: t });
   } catch (err) {

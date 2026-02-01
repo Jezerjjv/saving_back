@@ -1,5 +1,11 @@
 import { query } from './db.js';
 
+/** IDs de todos los usuarios (para jobs que se ejecutan por usuario). */
+export async function getUserIds() {
+  const { rows } = await query('SELECT id FROM users ORDER BY id');
+  return rows.map((r) => r.id);
+}
+
 function rowAccount(r) {
   return r ? { id: r.id, name: r.name, balance: Number(r.balance), accountType: r.account_type || 'bank', currency: r.currency || 'EUR' } : null;
 }
@@ -70,28 +76,34 @@ function rowQuickTemplate(r) {
   return r ? { id: r.id, type: r.type, name: r.name, icon: r.icon || '📁', categoryId: r.category_id, amount: Number(r.amount), accountId: r.account_id, showInQuick: r.show_in_quick } : null;
 }
 
-// --- Accounts ---
-export async function getAccounts() {
-  const { rows } = await query('SELECT id, name, balance, account_type, currency FROM accounts ORDER BY id');
+// --- Accounts (por usuario) ---
+export async function getAccounts(userId) {
+  const { rows } = await query(
+    'SELECT id, name, balance, account_type, currency FROM accounts WHERE user_id = $1 ORDER BY id',
+    [userId]
+  );
   return rows.map(rowAccount);
 }
 
-export async function getAccount(id) {
-  const { rows } = await query('SELECT id, name, balance, account_type, currency FROM accounts WHERE id = $1', [id]);
-  return rowAccount(rows[0]);
-}
-
-export async function createAccount({ name, balance = 0, accountType = 'bank', currency = 'EUR' }) {
-  const type = accountType === 'cash' ? 'cash' : 'bank';
-  const curr = currency === 'USD' ? 'USD' : 'EUR';
+export async function getAccount(userId, id) {
   const { rows } = await query(
-    'INSERT INTO accounts (name, balance, account_type, currency) VALUES ($1, $2, $3, $4) RETURNING id, name, balance, account_type, currency',
-    [name.trim(), Number(balance) || 0, type, curr]
+    'SELECT id, name, balance, account_type, currency FROM accounts WHERE id = $1 AND user_id = $2',
+    [id, userId]
   );
   return rowAccount(rows[0]);
 }
 
-export async function updateAccount(id, { name, balance, accountType, currency }) {
+export async function createAccount(userId, { name, balance = 0, accountType = 'bank', currency = 'EUR' }) {
+  const type = accountType === 'cash' ? 'cash' : 'bank';
+  const curr = currency === 'USD' ? 'USD' : 'EUR';
+  const { rows } = await query(
+    'INSERT INTO accounts (user_id, name, balance, account_type, currency) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, balance, account_type, currency',
+    [userId, name.trim(), Number(balance) || 0, type, curr]
+  );
+  return rowAccount(rows[0]);
+}
+
+export async function updateAccount(userId, id, { name, balance, accountType, currency }) {
   const updates = [];
   const params = [];
   let n = 1;
@@ -111,17 +123,17 @@ export async function updateAccount(id, { name, balance, accountType, currency }
     updates.push(`currency = $${n++}`);
     params.push(currency === 'USD' ? 'USD' : 'EUR');
   }
-  if (updates.length === 0) return getAccount(id);
-  params.push(id);
+  if (updates.length === 0) return getAccount(userId, id);
+  params.push(id, userId);
   const { rows } = await query(
-    `UPDATE accounts SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, name, balance, account_type, currency`,
+    `UPDATE accounts SET ${updates.join(', ')} WHERE id = $${n} AND user_id = $${n + 1} RETURNING id, name, balance, account_type, currency`,
     params
   );
   return rowAccount(rows[0]);
 }
 
-export async function deleteAccount(id) {
-  const { rowCount } = await query('DELETE FROM accounts WHERE id = $1', [id]);
+export async function deleteAccount(userId, id) {
+  const { rowCount } = await query('DELETE FROM accounts WHERE id = $1 AND user_id = $2', [id, userId]);
   return rowCount > 0;
 }
 
@@ -191,37 +203,40 @@ export async function deleteProductType(id) {
   return rowCount > 0;
 }
 
-// --- Account products (solo para cuentas bancarias) ---
-export async function getAccountProducts(accountId) {
+// --- Account products (solo para cuentas bancarias; cuenta ya es del usuario) ---
+export async function getAccountProducts(userId, accountId) {
   const { rows } = await query(
     `SELECT ap.id, ap.account_id, ap.name, ap.product_type_id, ap.balance, ap.interest_rate_annual,
             pt.name AS product_type_name, pt.slug AS product_type_slug, pt.icon AS product_type_icon
      FROM account_products ap
      JOIN product_types pt ON pt.id = ap.product_type_id
-     WHERE ap.account_id = $1 ORDER BY ap.id`,
-    [accountId]
+     JOIN accounts a ON a.id = ap.account_id AND a.user_id = $1
+     WHERE ap.account_id = $2 ORDER BY ap.id`,
+    [userId, accountId]
   );
   return rows.map(rowAccountProduct);
 }
 
-export async function getAccountProduct(id) {
+export async function getAccountProduct(userId, id) {
   const { rows } = await query(
     `SELECT ap.id, ap.account_id, ap.name, ap.product_type_id, ap.balance, ap.interest_rate_annual,
             pt.name AS product_type_name, pt.slug AS product_type_slug, pt.icon AS product_type_icon
      FROM account_products ap
      JOIN product_types pt ON pt.id = ap.product_type_id
-     WHERE ap.id = $1`,
-    [id]
+     JOIN accounts a ON a.id = ap.account_id AND a.user_id = $1
+     WHERE ap.id = $2`,
+    [userId, id]
   );
   return rowAccountProduct(rows[0]);
 }
 
-export async function createAccountProduct({ accountId, name, productTypeId, balance = 0, interestRateAnnual }) {
+export async function createAccountProduct(userId, { accountId, name, productTypeId, balance = 0, interestRateAnnual }) {
   const typeId = Number(productTypeId);
   const rate = interestRateAnnual != null && interestRateAnnual !== '' ? Number(interestRateAnnual) : null;
   await query(
-    'INSERT INTO account_products (account_id, name, product_type_id, balance, interest_rate_annual) VALUES ($1, $2, $3, $4, $5)',
-    [accountId, name.trim(), typeId, Number(balance) || 0, rate]
+    `INSERT INTO account_products (account_id, name, product_type_id, balance, interest_rate_annual)
+     SELECT $1, $2, $3, $4, $5 FROM accounts WHERE id = $1 AND user_id = $6`,
+    [accountId, name.trim(), typeId, Number(balance) || 0, rate, userId]
   );
   const { rows } = await query(
     `SELECT ap.id, ap.account_id, ap.name, ap.product_type_id, ap.balance, ap.interest_rate_annual,
@@ -234,7 +249,7 @@ export async function createAccountProduct({ accountId, name, productTypeId, bal
   return rowAccountProduct(rows[0]);
 }
 
-export async function updateAccountProduct(id, { name, productTypeId, balance, interestRateAnnual }) {
+export async function updateAccountProduct(userId, id, { name, productTypeId, balance, interestRateAnnual }) {
   const updates = [];
   const params = [];
   let n = 1;
@@ -254,26 +269,29 @@ export async function updateAccountProduct(id, { name, productTypeId, balance, i
     updates.push(`interest_rate_annual = $${n++}`);
     params.push(interestRateAnnual != null && interestRateAnnual !== '' ? Number(interestRateAnnual) : null);
   }
-  if (updates.length === 0) return getAccountProduct(id);
-  params.push(id);
-  await query(`UPDATE account_products SET ${updates.join(', ')} WHERE id = $${n}`, params);
-  return getAccountProduct(id);
+  if (updates.length === 0) return getAccountProduct(userId, id);
+  params.push(id, userId);
+  await query(
+    `UPDATE account_products SET ${updates.join(', ')} WHERE id = $${n} AND account_id IN (SELECT id FROM accounts WHERE user_id = $${n + 1})`,
+    params
+  );
+  return getAccountProduct(userId, id);
 }
 
-export async function deleteAccountProduct(id) {
-  const { rowCount } = await query('DELETE FROM account_products WHERE id = $1', [id]);
+export async function deleteAccountProduct(userId, id) {
+  const { rowCount } = await query(
+    'DELETE FROM account_products WHERE id = $1 AND account_id IN (SELECT id FROM accounts WHERE user_id = $2)',
+    [id, userId]
+  );
   return rowCount > 0;
 }
 
 /**
- * Aplica intereses diarios a cuentas que tienen un producto tipo "Interés".
- * El % es anual; se capitaliza sobre el saldo base de la cuenta:
- * nuevo_saldo_cuenta = saldo_cuenta * (1 + r/100)^(1/365).
- * Solo marca "ya aplicado hoy" cuando realmente se aplicó a al menos una cuenta.
+ * Aplica intereses diarios a cuentas que tienen un producto tipo "Interés" (por usuario).
  */
-export async function applyDailyInterest() {
+export async function applyDailyInterest(userId) {
   const today = new Date().toISOString().slice(0, 10);
-  const settings = await getAppSettings();
+  const settings = await getAppSettings(userId);
   if (settings.lastInterestRunDate === today) {
     return { applied: 0, totalInterest: 0, skipped: true, reason: 'already_today' };
   }
@@ -290,10 +308,10 @@ export async function applyDailyInterest() {
             POWER(1 + ap.interest_rate_annual / 100.0, 1.0 / 365.0) AS multiplier
      FROM accounts a
      JOIN account_products ap ON ap.account_id = a.id
-     WHERE ap.product_type_id = $1
+     WHERE a.user_id = $1 AND ap.product_type_id = $2
        AND ap.interest_rate_annual IS NOT NULL AND ap.interest_rate_annual > 0
      ORDER BY a.id, ap.id`,
-    [interestTypeId.rows[0].id]
+    [userId, interestTypeId.rows[0].id]
   );
 
   const byAccount = new Map();
@@ -319,22 +337,24 @@ export async function applyDailyInterest() {
        SELECT DISTINCT ON (ap.account_id) ap.account_id,
               POWER(1 + ap.interest_rate_annual / 100.0, 1.0 / 365.0) AS multiplier
        FROM account_products ap
+       JOIN accounts a2 ON a2.id = ap.account_id AND a2.user_id = $1
        WHERE ap.product_type_id = (SELECT id FROM product_types WHERE slug = 'interest' LIMIT 1)
          AND ap.interest_rate_annual IS NOT NULL AND ap.interest_rate_annual > 0
        ORDER BY ap.account_id, ap.id
      ) sub
-     WHERE a.id = sub.account_id`
+     WHERE a.id = sub.account_id AND a.user_id = $1`,
+    [userId]
   );
   const applied = rowCount ?? 0;
 
   if (applied > 0) {
-    await updateAppSettings({ lastInterestRunDate: today });
+    await updateAppSettings(userId, { lastInterestRunDate: today });
     for (const [accountId, { balance, multiplier }] of byAccount) {
       const amount = Math.round(balance * (multiplier - 1) * 100) / 100;
       if (amount < 0.01) continue;
       await query(
-        `INSERT INTO interest_history (date, account_id, amount) VALUES ($1, $2, $3)`,
-        [today, accountId, amount]
+        `INSERT INTO interest_history (user_id, date, account_id, amount) VALUES ($1, $2, $3, $4)`,
+        [userId, today, accountId, amount]
       );
     }
   }
@@ -346,33 +366,37 @@ export async function applyDailyInterest() {
   };
 }
 
-/** True si hay al menos una cuenta con un producto de tipo interés (slug = 'interest'). */
-export async function hasInterestProduct() {
+/** True si hay al menos una cuenta con un producto de tipo interés (slug = 'interest') para el usuario. */
+export async function hasInterestProduct(userId) {
   const { rows } = await query(
     `SELECT 1 FROM account_products ap
+     JOIN accounts a ON a.id = ap.account_id AND a.user_id = $1
      JOIN product_types pt ON pt.id = ap.product_type_id
      WHERE pt.slug = 'interest' AND ap.interest_rate_annual IS NOT NULL AND ap.interest_rate_annual > 0
-     LIMIT 1`
+     LIMIT 1`,
+    [userId]
   );
   return (rows?.length ?? 0) > 0;
 }
 
 /** Historial de intereses: lista { date, accountId, amount } opcionalmente filtrado por año/mes. */
-export async function getInterestHistory(year, month) {
+export async function getInterestHistory(userId, year, month) {
   let sql = `
     SELECT ih.date, ih.account_id AS account_id, ih.amount
     FROM interest_history ih
+    WHERE ih.user_id = $1
   `;
-  const params = [];
+  const params = [userId];
+  let n = 2;
   if (year != null && month != null) {
-    sql += ` WHERE EXTRACT(YEAR FROM ih.date) = $1 AND EXTRACT(MONTH FROM ih.date) = $2`;
+    sql += ` AND EXTRACT(YEAR FROM ih.date) = $${n++} AND EXTRACT(MONTH FROM ih.date) = $${n++}`;
     params.push(year, month);
   } else if (year != null) {
-    sql += ` WHERE EXTRACT(YEAR FROM ih.date) = $1`;
+    sql += ` AND EXTRACT(YEAR FROM ih.date) = $${n++}`;
     params.push(year);
   }
   sql += ' ORDER BY ih.date DESC, ih.account_id';
-  const { rows } = await query(sql, params.length ? params : undefined);
+  const { rows } = await query(sql, params);
   return rows.map((r) => ({
     date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : r.date,
     accountId: r.account_id,
@@ -432,26 +456,32 @@ export async function deleteIcon(id) {
   return rowCount > 0;
 }
 
-// --- Categories ---
-export async function getCategories() {
-  const { rows } = await query('SELECT id, name, icon FROM categories ORDER BY id');
+// --- Categories (por usuario) ---
+export async function getCategories(userId) {
+  const { rows } = await query(
+    'SELECT id, name, icon FROM categories WHERE user_id = $1 ORDER BY id',
+    [userId]
+  );
   return rows.map(rowCategory);
 }
 
-export async function getCategory(id) {
-  const { rows } = await query('SELECT id, name, icon FROM categories WHERE id = $1', [id]);
-  return rowCategory(rows[0]);
-}
-
-export async function createCategory({ name, icon = '📁' }) {
+export async function getCategory(userId, id) {
   const { rows } = await query(
-    'INSERT INTO categories (name, icon) VALUES ($1, $2) RETURNING id, name, icon',
-    [name.trim(), String(icon).trim() || '📁']
+    'SELECT id, name, icon FROM categories WHERE id = $1 AND user_id = $2',
+    [id, userId]
   );
   return rowCategory(rows[0]);
 }
 
-export async function updateCategory(id, { name, icon }) {
+export async function createCategory(userId, { name, icon = '📁' }) {
+  const { rows } = await query(
+    'INSERT INTO categories (user_id, name, icon) VALUES ($1, $2, $3) RETURNING id, name, icon',
+    [userId, name.trim(), String(icon).trim() || '📁']
+  );
+  return rowCategory(rows[0]);
+}
+
+export async function updateCategory(userId, id, { name, icon }) {
   const updates = [];
   const params = [];
   let n = 1;
@@ -463,49 +493,51 @@ export async function updateCategory(id, { name, icon }) {
     updates.push(`icon = $${n++}`);
     params.push(String(icon).trim());
   }
-  if (updates.length === 0) return getCategory(id);
-  params.push(id);
+  if (updates.length === 0) return getCategory(userId, id);
+  params.push(id, userId);
   const { rows } = await query(
-    `UPDATE categories SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, name, icon`,
+    `UPDATE categories SET ${updates.join(', ')} WHERE id = $${n} AND user_id = $${n + 1} RETURNING id, name, icon`,
     params
   );
   return rowCategory(rows[0]);
 }
 
-export async function deleteCategory(id) {
-  const { rowCount } = await query('DELETE FROM categories WHERE id = $1', [id]);
+export async function deleteCategory(userId, id) {
+  const { rowCount } = await query('DELETE FROM categories WHERE id = $1 AND user_id = $2', [id, userId]);
   return rowCount > 0;
 }
 
-// --- Transactions ---
-export async function getTransactions() {
+// --- Transactions (por usuario) ---
+export async function getTransactions(userId) {
   const { rows } = await query(
-    'SELECT id, name, category_id, amount, account_id, type, income_type, expense_type, date FROM transactions ORDER BY date DESC'
+    'SELECT id, name, category_id, amount, account_id, type, income_type, expense_type, date FROM transactions WHERE user_id = $1 ORDER BY date DESC',
+    [userId]
   );
   return rows.map(rowTransaction);
 }
 
-export async function getTransaction(id) {
+export async function getTransaction(userId, id) {
   const { rows } = await query(
-    'SELECT id, name, category_id, amount, account_id, type, income_type, expense_type, date FROM transactions WHERE id = $1',
-    [id]
+    'SELECT id, name, category_id, amount, account_id, type, income_type, expense_type, date FROM transactions WHERE id = $1 AND user_id = $2',
+    [id, userId]
   );
   return rowTransaction(rows[0]);
 }
 
-export async function getTransactionsGrouped(month, year) {
-  const categories = await getCategories();
+export async function getTransactionsGrouped(userId, month, year) {
+  const categories = await getCategories(userId);
   let sql = `
     SELECT id, name, category_id, amount, account_id, type, income_type, expense_type, date
-    FROM transactions
+    FROM transactions WHERE user_id = $1
   `;
-  const params = [];
+  const params = [userId];
+  let n = 2;
   if (month != null && year != null) {
-    sql += ` WHERE EXTRACT(MONTH FROM date AT TIME ZONE 'UTC') = $1 AND EXTRACT(YEAR FROM date AT TIME ZONE 'UTC') = $2`;
+    sql += ` AND EXTRACT(MONTH FROM date AT TIME ZONE 'UTC') = $${n++} AND EXTRACT(YEAR FROM date AT TIME ZONE 'UTC') = $${n++}`;
     params.push(month, year);
   }
   sql += ' ORDER BY date DESC';
-  const { rows } = await query(sql, params.length ? params : undefined);
+  const { rows } = await query(sql, params);
   const list = rows.map(rowTransaction);
   const byDay = {};
   for (const t of list) {
@@ -527,7 +559,7 @@ export async function getTransactionsGrouped(month, year) {
 }
 
 /** Gastos del mes agrupados por categoría (para resumen mensual). */
-export async function getExpensesByCategory(month, year) {
+export async function getExpensesByCategory(userId, month, year) {
   const m = month != null ? Number(month) : new Date().getMonth() + 1;
   const y = year != null ? Number(year) : new Date().getFullYear();
   const { rows } = await query(
@@ -537,13 +569,13 @@ export async function getExpensesByCategory(month, year) {
        COALESCE(c.icon, '📁') AS category_icon,
        SUM(t.amount) AS total
      FROM transactions t
-     LEFT JOIN categories c ON c.id = t.category_id
-     WHERE t.type = 'expense'
-       AND EXTRACT(MONTH FROM t.date AT TIME ZONE 'UTC') = $1
-       AND EXTRACT(YEAR FROM t.date AT TIME ZONE 'UTC') = $2
+     LEFT JOIN categories c ON c.id = t.category_id AND c.user_id = t.user_id
+     WHERE t.user_id = $1 AND t.type = 'expense'
+       AND EXTRACT(MONTH FROM t.date AT TIME ZONE 'UTC') = $2
+       AND EXTRACT(YEAR FROM t.date AT TIME ZONE 'UTC') = $3
      GROUP BY t.category_id, c.name, c.icon
      ORDER BY total DESC`,
-    [m, y]
+    [userId, m, y]
   );
   return rows.map((r) => ({
     categoryId: r.category_id,
@@ -554,7 +586,7 @@ export async function getExpensesByCategory(month, year) {
 }
 
 /** Ingresos del mes agrupados por categoría (para resumen mensual). */
-export async function getIncomesByCategory(month, year) {
+export async function getIncomesByCategory(userId, month, year) {
   const m = month != null ? Number(month) : new Date().getMonth() + 1;
   const y = year != null ? Number(year) : new Date().getFullYear();
   const { rows } = await query(
@@ -564,13 +596,13 @@ export async function getIncomesByCategory(month, year) {
        COALESCE(c.icon, '📁') AS category_icon,
        SUM(t.amount) AS total
      FROM transactions t
-     LEFT JOIN categories c ON c.id = t.category_id
-     WHERE t.type = 'income'
-       AND EXTRACT(MONTH FROM t.date AT TIME ZONE 'UTC') = $1
-       AND EXTRACT(YEAR FROM t.date AT TIME ZONE 'UTC') = $2
+     LEFT JOIN categories c ON c.id = t.category_id AND c.user_id = t.user_id
+     WHERE t.user_id = $1 AND t.type = 'income'
+       AND EXTRACT(MONTH FROM t.date AT TIME ZONE 'UTC') = $2
+       AND EXTRACT(YEAR FROM t.date AT TIME ZONE 'UTC') = $3
      GROUP BY t.category_id, c.name, c.icon
      ORDER BY total DESC`,
-    [m, y]
+    [userId, m, y]
   );
   return rows.map((r) => ({
     categoryId: r.category_id,
@@ -580,7 +612,7 @@ export async function getIncomesByCategory(month, year) {
   }));
 }
 
-export async function getMonthlySummary(year) {
+export async function getMonthlySummary(userId, year) {
   const y = year != null ? Number(year) : new Date().getFullYear();
   const { rows } = await query(
     `SELECT
@@ -588,10 +620,10 @@ export async function getMonthlySummary(year) {
        SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) AS income,
        SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) AS expense
      FROM transactions
-     WHERE EXTRACT(YEAR FROM date AT TIME ZONE 'UTC') = $1
+     WHERE user_id = $1 AND EXTRACT(YEAR FROM date AT TIME ZONE 'UTC') = $2
      GROUP BY EXTRACT(MONTH FROM date AT TIME ZONE 'UTC')
      ORDER BY month`,
-    [y]
+    [userId, y]
   );
   const byMonth = {};
   for (let m = 1; m <= 12; m++) {
@@ -607,7 +639,7 @@ export async function getMonthlySummary(year) {
 }
 
 /** Por cada día del año con transacciones: si hay ingresos y/o gastos (para indicadores en calendario). */
-export async function getDailyIndicators(year) {
+export async function getDailyIndicators(userId, year) {
   const y = year != null ? Number(year) : new Date().getFullYear();
   const { rows } = await query(
     `SELECT
@@ -616,9 +648,9 @@ export async function getDailyIndicators(year) {
        MAX(CASE WHEN type = 'income' THEN 1 ELSE 0 END) AS has_income,
        MAX(CASE WHEN type = 'expense' THEN 1 ELSE 0 END) AS has_expense
      FROM transactions
-     WHERE EXTRACT(YEAR FROM date AT TIME ZONE 'UTC') = $1
+     WHERE user_id = $1 AND EXTRACT(YEAR FROM date AT TIME ZONE 'UTC') = $2
      GROUP BY EXTRACT(MONTH FROM date AT TIME ZONE 'UTC'), EXTRACT(DAY FROM date AT TIME ZONE 'UTC')`,
-    [y]
+    [userId, y]
   );
   return rows.map((r) => ({
     month: r.month,
@@ -628,27 +660,27 @@ export async function getDailyIndicators(year) {
   }));
 }
 
-export async function createTransaction({ name, categoryId, amount, accountId, type, incomeType, expenseType, date }) {
+export async function createTransaction(userId, { name, categoryId, amount, accountId, type, incomeType, expenseType, date }) {
   const dateVal = date ? new Date(date).toISOString().split('T')[0] + 'T12:00:00.000Z' : new Date().toISOString();
   const incomeTypeVal = type === 'income' ? (incomeType ?? null) : null;
   const expenseTypeVal = type === 'expense' ? (expenseType ?? null) : null;
   const { rows } = await query(
-    `INSERT INTO transactions (name, category_id, amount, account_id, type, income_type, expense_type, date)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO transactions (user_id, name, category_id, amount, account_id, type, income_type, expense_type, date)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id, name, category_id, amount, account_id, type, income_type, expense_type, date`,
-    [name.trim(), categoryId != null ? categoryId : null, amount, accountId, type, incomeTypeVal, expenseTypeVal, dateVal]
+    [userId, name.trim(), categoryId != null ? categoryId : null, amount, accountId, type, incomeTypeVal, expenseTypeVal, dateVal]
   );
   const tx = rowTransaction(rows[0]);
   const delta = type === 'expense' ? -Number(amount) : Number(amount);
-  await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [delta, accountId]);
+  await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2 AND user_id = $3', [delta, accountId, userId]);
   return tx;
 }
 
-export async function updateTransaction(id, { name, categoryId, amount, accountId, type, incomeType, expenseType, date }) {
-  const old = await getTransaction(id);
+export async function updateTransaction(userId, id, { name, categoryId, amount, accountId, type, incomeType, expenseType, date }) {
+  const old = await getTransaction(userId, id);
   if (!old) return null;
   const prevDelta = old.type === 'expense' ? old.amount : -old.amount;
-  await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [prevDelta, old.accountId]);
+  await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2 AND user_id = $3', [prevDelta, old.accountId, userId]);
   const newAmount = amount !== undefined ? Number(amount) : old.amount;
   const newAccountId = accountId !== undefined ? accountId : old.accountId;
   const newType = type || old.type;
@@ -657,33 +689,39 @@ export async function updateTransaction(id, { name, categoryId, amount, accountI
   const newDate = date ? new Date(date).toISOString() : old.date;
   const { rows } = await query(
     `UPDATE transactions SET name = COALESCE($2, name), category_id = $3, amount = $4, account_id = $5, type = $6, income_type = $7, expense_type = $8, "date" = $9
-     WHERE id = $1 RETURNING id, name, category_id, amount, account_id, type, income_type, expense_type, date`,
-    [id, name !== undefined ? name.trim() : null, categoryId !== undefined ? categoryId : null, newAmount, newAccountId, newType, newType === 'income' ? newIncomeType : null, newType === 'expense' ? newExpenseType : null, newDate]
+     WHERE id = $1 AND user_id = $10 RETURNING id, name, category_id, amount, account_id, type, income_type, expense_type, date`,
+    [id, name !== undefined ? name.trim() : null, categoryId !== undefined ? categoryId : null, newAmount, newAccountId, newType, newType === 'income' ? newIncomeType : null, newType === 'expense' ? newExpenseType : null, newDate, userId]
   );
   if (!rows[0]) return null;
   const tx = rowTransaction(rows[0]);
   const newDelta = newType === 'expense' ? -newAmount : newAmount;
-  await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [newDelta, newAccountId]);
+  await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2 AND user_id = $3', [newDelta, newAccountId, userId]);
   return tx;
 }
 
-export async function deleteTransaction(id) {
-  const tx = await getTransaction(id);
+export async function deleteTransaction(userId, id) {
+  const tx = await getTransaction(userId, id);
   if (!tx) return false;
   const delta = tx.type === 'expense' ? tx.amount : -tx.amount;
-  await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [delta, tx.accountId]);
-  const { rowCount } = await query('DELETE FROM transactions WHERE id = $1', [id]);
+  await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2 AND user_id = $3', [delta, tx.accountId, userId]);
+  const { rowCount } = await query('DELETE FROM transactions WHERE id = $1 AND user_id = $2', [id, userId]);
   return rowCount > 0;
 }
 
-// --- Fixed incomes ---
-export async function getFixedIncomes() {
-  const { rows } = await query('SELECT id, name, category_id, amount, account_id, day_of_month FROM fixed_incomes ORDER BY id');
+// --- Fixed incomes (por usuario) ---
+export async function getFixedIncomes(userId) {
+  const { rows } = await query(
+    'SELECT id, name, category_id, amount, account_id, day_of_month FROM fixed_incomes WHERE user_id = $1 ORDER BY id',
+    [userId]
+  );
   return rows.map(rowFixedIncome);
 }
 
-export async function getFixedIncome(id) {
-  const { rows } = await query('SELECT id, name, category_id, amount, account_id, day_of_month FROM fixed_incomes WHERE id = $1', [id]);
+export async function getFixedIncome(userId, id) {
+  const { rows } = await query(
+    'SELECT id, name, category_id, amount, account_id, day_of_month FROM fixed_incomes WHERE id = $1 AND user_id = $2',
+    [id, userId]
+  );
   return rowFixedIncome(rows[0]);
 }
 
@@ -693,16 +731,16 @@ function dateForDayOfMonth(year, month, day) {
   return `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}T12:00:00.000Z`;
 }
 
-export async function createFixedIncome({ name, categoryId, amount, accountId, dayOfMonth = 1 }) {
+export async function createFixedIncome(userId, { name, categoryId, amount, accountId, dayOfMonth = 1 }) {
   const day = Math.min(31, Math.max(1, Number(dayOfMonth) || 1));
   const { rows } = await query(
-    'INSERT INTO fixed_incomes (name, category_id, amount, account_id, day_of_month) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, category_id, amount, account_id, day_of_month',
-    [name.trim(), categoryId != null ? categoryId : null, Number(amount), accountId, day]
+    'INSERT INTO fixed_incomes (user_id, name, category_id, amount, account_id, day_of_month) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, category_id, amount, account_id, day_of_month',
+    [userId, name.trim(), categoryId != null ? categoryId : null, Number(amount), accountId, day]
   );
   return rowFixedIncome(rows[0]);
 }
 
-export async function updateFixedIncome(id, { name, categoryId, amount, accountId, dayOfMonth }) {
+export async function updateFixedIncome(userId, id, { name, categoryId, amount, accountId, dayOfMonth }) {
   const updates = [];
   const params = [];
   let n = 1;
@@ -726,23 +764,23 @@ export async function updateFixedIncome(id, { name, categoryId, amount, accountI
     updates.push(`day_of_month = $${n++}`);
     params.push(Math.min(31, Math.max(1, Number(dayOfMonth) || 1)));
   }
-  if (updates.length === 0) return getFixedIncome(id);
-  params.push(id);
+  if (updates.length === 0) return getFixedIncome(userId, id);
+  params.push(id, userId);
   const { rows } = await query(
-    `UPDATE fixed_incomes SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, name, category_id, amount, account_id, day_of_month`,
+    `UPDATE fixed_incomes SET ${updates.join(', ')} WHERE id = $${n} AND user_id = $${n + 1} RETURNING id, name, category_id, amount, account_id, day_of_month`,
     params
   );
   return rowFixedIncome(rows[0]);
 }
 
-export async function deleteFixedIncome(id) {
-  const { rowCount } = await query('DELETE FROM fixed_incomes WHERE id = $1', [id]);
+export async function deleteFixedIncome(userId, id) {
+  const { rowCount } = await query('DELETE FROM fixed_incomes WHERE id = $1 AND user_id = $2', [id, userId]);
   return rowCount > 0;
 }
 
-/** Aplica ingresos fijos para un mes. Si day (1-31) se indica, solo aplica los que tienen day_of_month === day (para el job diario). */
-export async function applyFixedIncomesForMonth(month, year, dayFilter = null) {
-  let fixedList = await getFixedIncomes();
+/** Aplica ingresos fijos para un mes (por usuario). */
+export async function applyFixedIncomesForMonth(userId, month, year, dayFilter = null) {
+  let fixedList = await getFixedIncomes(userId);
   const m = month != null ? Number(month) : new Date().getMonth() + 1;
   const y = year != null ? Number(year) : new Date().getFullYear();
   if (dayFilter != null) {
@@ -753,8 +791,8 @@ export async function applyFixedIncomesForMonth(month, year, dayFilter = null) {
   const nextYear = m === 12 ? y + 1 : y;
   const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
   const existing = await query(
-    `SELECT name FROM transactions WHERE type = 'income' AND income_type = 'fixed' AND date >= $1 AND date < $2`,
-    [`${y}-${String(m).padStart(2, '0')}-01`, endDate]
+    `SELECT name FROM transactions WHERE user_id = $1 AND type = 'income' AND income_type = 'fixed' AND date >= $2 AND date < $3`,
+    [userId, `${y}-${String(m).padStart(2, '0')}-01`, endDate]
   );
   const existingNames = new Set(existing.rows.map((r) => r.name));
   const created = [];
@@ -762,7 +800,7 @@ export async function applyFixedIncomesForMonth(month, year, dayFilter = null) {
     if (existingNames.has(fi.name)) continue;
     const day = fi.dayOfMonth != null ? fi.dayOfMonth : 1;
     const dateStr = dateForDayOfMonth(y, m, day);
-    const tx = await createTransaction({
+    const tx = await createTransaction(userId, {
       name: fi.name,
       categoryId: fi.categoryId,
       amount: fi.amount,
@@ -777,9 +815,9 @@ export async function applyFixedIncomesForMonth(month, year, dayFilter = null) {
   return created;
 }
 
-/** Aplica un solo ingreso fijo por id para el mes/año indicado. Devuelve la transacción creada o null si ya existía en el mes. */
-export async function applySingleFixedIncome(id, month, year) {
-  const fi = await getFixedIncome(id);
+/** Aplica un solo ingreso fijo por id para el mes/año indicado. */
+export async function applySingleFixedIncome(userId, id, month, year) {
+  const fi = await getFixedIncome(userId, id);
   if (!fi) return null;
   const m = month != null ? Number(month) : new Date().getMonth() + 1;
   const y = year != null ? Number(year) : new Date().getFullYear();
@@ -787,13 +825,13 @@ export async function applySingleFixedIncome(id, month, year) {
   const nextYear = m === 12 ? y + 1 : y;
   const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
   const existing = await query(
-    `SELECT id FROM transactions WHERE type = 'income' AND income_type = 'fixed' AND name = $1 AND date >= $2 AND date < $3`,
-    [fi.name, `${y}-${String(m).padStart(2, '0')}-01`, endDate]
+    `SELECT id FROM transactions WHERE user_id = $1 AND type = 'income' AND income_type = 'fixed' AND name = $2 AND date >= $3 AND date < $4`,
+    [userId, fi.name, `${y}-${String(m).padStart(2, '0')}-01`, endDate]
   );
   if (existing.rows.length > 0) return null;
   const day = fi.dayOfMonth != null ? fi.dayOfMonth : 1;
   const dateStr = dateForDayOfMonth(y, m, day);
-  return createTransaction({
+  return createTransaction(userId, {
     name: fi.name,
     categoryId: fi.categoryId,
     amount: fi.amount,
@@ -804,27 +842,33 @@ export async function applySingleFixedIncome(id, month, year) {
   });
 }
 
-// --- Fixed expenses ---
-export async function getFixedExpenses() {
-  const { rows } = await query('SELECT id, name, category_id, amount, account_id, day_of_month FROM fixed_expenses ORDER BY id');
+// --- Fixed expenses (por usuario) ---
+export async function getFixedExpenses(userId) {
+  const { rows } = await query(
+    'SELECT id, name, category_id, amount, account_id, day_of_month FROM fixed_expenses WHERE user_id = $1 ORDER BY id',
+    [userId]
+  );
   return rows.map(rowFixedExpense);
 }
 
-export async function getFixedExpense(id) {
-  const { rows } = await query('SELECT id, name, category_id, amount, account_id, day_of_month FROM fixed_expenses WHERE id = $1', [id]);
-  return rowFixedExpense(rows[0]);
-}
-
-export async function createFixedExpense({ name, categoryId, amount, accountId, dayOfMonth = 1 }) {
-  const day = Math.min(31, Math.max(1, Number(dayOfMonth) || 1));
+export async function getFixedExpense(userId, id) {
   const { rows } = await query(
-    'INSERT INTO fixed_expenses (name, category_id, amount, account_id, day_of_month) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, category_id, amount, account_id, day_of_month',
-    [name.trim(), categoryId != null ? categoryId : null, Number(amount), accountId, day]
+    'SELECT id, name, category_id, amount, account_id, day_of_month FROM fixed_expenses WHERE id = $1 AND user_id = $2',
+    [id, userId]
   );
   return rowFixedExpense(rows[0]);
 }
 
-export async function updateFixedExpense(id, { name, categoryId, amount, accountId, dayOfMonth }) {
+export async function createFixedExpense(userId, { name, categoryId, amount, accountId, dayOfMonth = 1 }) {
+  const day = Math.min(31, Math.max(1, Number(dayOfMonth) || 1));
+  const { rows } = await query(
+    'INSERT INTO fixed_expenses (user_id, name, category_id, amount, account_id, day_of_month) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, category_id, amount, account_id, day_of_month',
+    [userId, name.trim(), categoryId != null ? categoryId : null, Number(amount), accountId, day]
+  );
+  return rowFixedExpense(rows[0]);
+}
+
+export async function updateFixedExpense(userId, id, { name, categoryId, amount, accountId, dayOfMonth }) {
   const updates = [];
   const params = [];
   let n = 1;
@@ -848,23 +892,23 @@ export async function updateFixedExpense(id, { name, categoryId, amount, account
     updates.push(`day_of_month = $${n++}`);
     params.push(Math.min(31, Math.max(1, Number(dayOfMonth) || 1)));
   }
-  if (updates.length === 0) return getFixedExpense(id);
-  params.push(id);
+  if (updates.length === 0) return getFixedExpense(userId, id);
+  params.push(id, userId);
   const { rows } = await query(
-    `UPDATE fixed_expenses SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, name, category_id, amount, account_id, day_of_month`,
+    `UPDATE fixed_expenses SET ${updates.join(', ')} WHERE id = $${n} AND user_id = $${n + 1} RETURNING id, name, category_id, amount, account_id, day_of_month`,
     params
   );
   return rowFixedExpense(rows[0]);
 }
 
-export async function deleteFixedExpense(id) {
-  const { rowCount } = await query('DELETE FROM fixed_expenses WHERE id = $1', [id]);
+export async function deleteFixedExpense(userId, id) {
+  const { rowCount } = await query('DELETE FROM fixed_expenses WHERE id = $1 AND user_id = $2', [id, userId]);
   return rowCount > 0;
 }
 
-/** Aplica gastos fijos para un mes. Si day (1-31) se indica, solo aplica los que tienen day_of_month === day (para el job diario). */
-export async function applyFixedExpensesForMonth(month, year, dayFilter = null) {
-  let fixedList = await getFixedExpenses();
+/** Aplica gastos fijos para un mes (por usuario). */
+export async function applyFixedExpensesForMonth(userId, month, year, dayFilter = null) {
+  let fixedList = await getFixedExpenses(userId);
   const m = month != null ? Number(month) : new Date().getMonth() + 1;
   const y = year != null ? Number(year) : new Date().getFullYear();
   if (dayFilter != null) {
@@ -875,8 +919,8 @@ export async function applyFixedExpensesForMonth(month, year, dayFilter = null) 
   const nextYear = m === 12 ? y + 1 : y;
   const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
   const existing = await query(
-    `SELECT name FROM transactions WHERE type = 'expense' AND expense_type = 'fixed' AND date >= $1 AND date < $2`,
-    [`${y}-${String(m).padStart(2, '0')}-01`, endDate]
+    `SELECT name FROM transactions WHERE user_id = $1 AND type = 'expense' AND expense_type = 'fixed' AND date >= $2 AND date < $3`,
+    [userId, `${y}-${String(m).padStart(2, '0')}-01`, endDate]
   );
   const existingNames = new Set(existing.rows.map((r) => r.name));
   const created = [];
@@ -884,7 +928,7 @@ export async function applyFixedExpensesForMonth(month, year, dayFilter = null) 
     if (existingNames.has(fe.name)) continue;
     const day = fe.dayOfMonth != null ? fe.dayOfMonth : 1;
     const dateStr = dateForDayOfMonth(y, m, day);
-    const tx = await createTransaction({
+    const tx = await createTransaction(userId, {
       name: fe.name,
       categoryId: fe.categoryId,
       amount: fe.amount,
@@ -899,9 +943,9 @@ export async function applyFixedExpensesForMonth(month, year, dayFilter = null) 
   return created;
 }
 
-/** Aplica un solo gasto fijo por id para el mes/año indicado. Devuelve la transacción creada o null si ya existía en el mes. */
-export async function applySingleFixedExpense(id, month, year) {
-  const fe = await getFixedExpense(id);
+/** Aplica un solo gasto fijo por id para el mes/año indicado. */
+export async function applySingleFixedExpense(userId, id, month, year) {
+  const fe = await getFixedExpense(userId, id);
   if (!fe) return null;
   const m = month != null ? Number(month) : new Date().getMonth() + 1;
   const y = year != null ? Number(year) : new Date().getFullYear();
@@ -909,13 +953,13 @@ export async function applySingleFixedExpense(id, month, year) {
   const nextYear = m === 12 ? y + 1 : y;
   const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
   const existing = await query(
-    `SELECT id FROM transactions WHERE type = 'expense' AND expense_type = 'fixed' AND name = $1 AND date >= $2 AND date < $3`,
-    [fe.name, `${y}-${String(m).padStart(2, '0')}-01`, endDate]
+    `SELECT id FROM transactions WHERE user_id = $1 AND type = 'expense' AND expense_type = 'fixed' AND name = $2 AND date >= $3 AND date < $4`,
+    [userId, fe.name, `${y}-${String(m).padStart(2, '0')}-01`, endDate]
   );
   if (existing.rows.length > 0) return null;
   const day = fe.dayOfMonth != null ? fe.dayOfMonth : 1;
   const dateStr = dateForDayOfMonth(y, m, day);
-  return createTransaction({
+  return createTransaction(userId, {
     name: fe.name,
     categoryId: fe.categoryId,
     amount: fe.amount,
@@ -926,11 +970,11 @@ export async function applySingleFixedExpense(id, month, year) {
   });
 }
 
-// --- Quick templates (plantillas rápidas: solo las con show_in_quick aparecen como botón) ---
-export async function getQuickTemplates({ type, showInQuick } = {}) {
-  let sql = 'SELECT id, type, name, icon, category_id, amount, account_id, show_in_quick FROM quick_templates WHERE 1=1';
-  const params = [];
-  let n = 1;
+// --- Quick templates (por usuario) ---
+export async function getQuickTemplates(userId, { type, showInQuick } = {}) {
+  let sql = 'SELECT id, type, name, icon, category_id, amount, account_id, show_in_quick FROM quick_templates WHERE user_id = $1';
+  const params = [userId];
+  let n = 2;
   if (type) {
     sql += ` AND type = $${n++}`;
     params.push(type);
@@ -940,25 +984,28 @@ export async function getQuickTemplates({ type, showInQuick } = {}) {
     params.push(!!showInQuick);
   }
   sql += ' ORDER BY name';
-  const { rows } = await query(sql, params.length ? params : undefined);
+  const { rows } = await query(sql, params);
   return rows.map(rowQuickTemplate);
 }
 
-export async function getQuickTemplate(id) {
-  const { rows } = await query('SELECT id, type, name, icon, category_id, amount, account_id, show_in_quick FROM quick_templates WHERE id = $1', [id]);
-  return rowQuickTemplate(rows[0]);
-}
-
-export async function createQuickTemplate({ type, name, icon = '📁', categoryId, amount, accountId, showInQuick = true }) {
-  const iconVal = (icon && String(icon).trim()) ? String(icon).trim().slice(0, 50) : '📁';
+export async function getQuickTemplate(userId, id) {
   const { rows } = await query(
-    'INSERT INTO quick_templates (type, name, icon, category_id, amount, account_id, show_in_quick) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, type, name, icon, category_id, amount, account_id, show_in_quick',
-    [type, name.trim(), iconVal, categoryId != null ? categoryId : null, Number(amount), accountId, !!showInQuick]
+    'SELECT id, type, name, icon, category_id, amount, account_id, show_in_quick FROM quick_templates WHERE id = $1 AND user_id = $2',
+    [id, userId]
   );
   return rowQuickTemplate(rows[0]);
 }
 
-export async function updateQuickTemplate(id, { name, icon, categoryId, amount, accountId, showInQuick }) {
+export async function createQuickTemplate(userId, { type, name, icon = '📁', categoryId, amount, accountId, showInQuick = true }) {
+  const iconVal = (icon && String(icon).trim()) ? String(icon).trim().slice(0, 50) : '📁';
+  const { rows } = await query(
+    'INSERT INTO quick_templates (user_id, type, name, icon, category_id, amount, account_id, show_in_quick) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, type, name, icon, category_id, amount, account_id, show_in_quick',
+    [userId, type, name.trim(), iconVal, categoryId != null ? categoryId : null, Number(amount), accountId, !!showInQuick]
+  );
+  return rowQuickTemplate(rows[0]);
+}
+
+export async function updateQuickTemplate(userId, id, { name, icon, categoryId, amount, accountId, showInQuick }) {
   const updates = [];
   const params = [];
   let n = 1;
@@ -986,75 +1033,77 @@ export async function updateQuickTemplate(id, { name, icon, categoryId, amount, 
     updates.push(`show_in_quick = $${n++}`);
     params.push(!!showInQuick);
   }
-  if (updates.length === 0) return getQuickTemplate(id);
-  params.push(id);
+  if (updates.length === 0) return getQuickTemplate(userId, id);
+  params.push(id, userId);
   const { rows } = await query(
-    `UPDATE quick_templates SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, type, name, icon, category_id, amount, account_id, show_in_quick`,
+    `UPDATE quick_templates SET ${updates.join(', ')} WHERE id = $${n} AND user_id = $${n + 1} RETURNING id, type, name, icon, category_id, amount, account_id, show_in_quick`,
     params
   );
   return rowQuickTemplate(rows[0]);
 }
 
-export async function deleteQuickTemplate(id) {
-  const { rowCount } = await query('DELETE FROM quick_templates WHERE id = $1', [id]);
+export async function deleteQuickTemplate(userId, id) {
+  const { rowCount } = await query('DELETE FROM quick_templates WHERE id = $1 AND user_id = $2', [id, userId]);
   return rowCount > 0;
 }
 
-// --- Transfers ---
-export async function getTransfers() {
+// --- Transfers (por usuario) ---
+export async function getTransfers(userId) {
   const { rows } = await query(
-    'SELECT id, from_account_id, to_account_id, amount, description, date, periodic_transfer_id FROM transfers ORDER BY date DESC'
+    'SELECT id, from_account_id, to_account_id, amount, description, date, periodic_transfer_id FROM transfers WHERE user_id = $1 ORDER BY date DESC',
+    [userId]
   );
   return rows.map(rowTransfer);
 }
 
-export async function getTransfer(id) {
+export async function getTransfer(userId, id) {
   const { rows } = await query(
-    'SELECT id, from_account_id, to_account_id, amount, description, date, periodic_transfer_id FROM transfers WHERE id = $1',
-    [id]
+    'SELECT id, from_account_id, to_account_id, amount, description, date, periodic_transfer_id FROM transfers WHERE id = $1 AND user_id = $2',
+    [id, userId]
   );
   return rowTransfer(rows[0]);
 }
 
-export async function createTransfer({ fromAccountId, toAccountId, amount, description, periodicTransferId }) {
+export async function createTransfer(userId, { fromAccountId, toAccountId, amount, description, periodicTransferId }) {
   const amt = Number(amount) || 0;
   const { rows } = await query(
-    `INSERT INTO transfers (from_account_id, to_account_id, amount, description, periodic_transfer_id) VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO transfers (user_id, from_account_id, to_account_id, amount, description, periodic_transfer_id) VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id, from_account_id, to_account_id, amount, description, date, periodic_transfer_id`,
-    [fromAccountId, toAccountId, amt, description ? description.trim() : null, periodicTransferId ?? null]
+    [userId, fromAccountId, toAccountId, amt, description ? description.trim() : null, periodicTransferId ?? null]
   );
-  await query('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [amt, fromAccountId]);
-  await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [amt, toAccountId]);
+  await query('UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND user_id = $3', [amt, fromAccountId, userId]);
+  await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2 AND user_id = $3', [amt, toAccountId, userId]);
   return rowTransfer(rows[0]);
 }
 
-// --- Periodic transfers (plantillas recurrentes por mes) ---
-export async function getPeriodicTransfers() {
+// --- Periodic transfers (por usuario) ---
+export async function getPeriodicTransfers(userId) {
   const { rows } = await query(
-    'SELECT id, from_account_id, to_account_id, amount, description, day_of_month FROM periodic_transfers ORDER BY id'
+    'SELECT id, from_account_id, to_account_id, amount, description, day_of_month FROM periodic_transfers WHERE user_id = $1 ORDER BY id',
+    [userId]
   );
   return rows.map(rowPeriodicTransfer);
 }
 
-export async function getPeriodicTransfer(id) {
+export async function getPeriodicTransfer(userId, id) {
   const { rows } = await query(
-    'SELECT id, from_account_id, to_account_id, amount, description, day_of_month FROM periodic_transfers WHERE id = $1',
-    [id]
+    'SELECT id, from_account_id, to_account_id, amount, description, day_of_month FROM periodic_transfers WHERE id = $1 AND user_id = $2',
+    [id, userId]
   );
   return rowPeriodicTransfer(rows[0]);
 }
 
-export async function createPeriodicTransfer({ fromAccountId, toAccountId, amount, description, dayOfMonth = 1 }) {
+export async function createPeriodicTransfer(userId, { fromAccountId, toAccountId, amount, description, dayOfMonth = 1 }) {
   const day = Math.min(31, Math.max(1, Number(dayOfMonth) || 1));
   const { rows } = await query(
-    `INSERT INTO periodic_transfers (from_account_id, to_account_id, amount, description, day_of_month) VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO periodic_transfers (user_id, from_account_id, to_account_id, amount, description, day_of_month) VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id, from_account_id, to_account_id, amount, description, day_of_month`,
-    [fromAccountId, toAccountId, Number(amount), description ? description.trim() : null, day]
+    [userId, fromAccountId, toAccountId, Number(amount), description ? description.trim() : null, day]
   );
   return rowPeriodicTransfer(rows[0]);
 }
 
-export async function updatePeriodicTransfer(id, { fromAccountId, toAccountId, amount, description, dayOfMonth }) {
+export async function updatePeriodicTransfer(userId, id, { fromAccountId, toAccountId, amount, description, dayOfMonth }) {
   const updates = [];
   const params = [];
   let n = 1;
@@ -1078,23 +1127,23 @@ export async function updatePeriodicTransfer(id, { fromAccountId, toAccountId, a
     updates.push(`day_of_month = $${n++}`);
     params.push(Math.min(31, Math.max(1, Number(dayOfMonth) || 1)));
   }
-  if (updates.length === 0) return getPeriodicTransfer(id);
-  params.push(id);
+  if (updates.length === 0) return getPeriodicTransfer(userId, id);
+  params.push(id, userId);
   const { rows } = await query(
-    `UPDATE periodic_transfers SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, from_account_id, to_account_id, amount, description, day_of_month`,
+    `UPDATE periodic_transfers SET ${updates.join(', ')} WHERE id = $${n} AND user_id = $${n + 1} RETURNING id, from_account_id, to_account_id, amount, description, day_of_month`,
     params
   );
   return rowPeriodicTransfer(rows[0]);
 }
 
-export async function deletePeriodicTransfer(id) {
-  const { rowCount } = await query('DELETE FROM periodic_transfers WHERE id = $1', [id]);
+export async function deletePeriodicTransfer(userId, id) {
+  const { rowCount } = await query('DELETE FROM periodic_transfers WHERE id = $1 AND user_id = $2', [id, userId]);
   return rowCount > 0;
 }
 
-/** Aplica transferencias periódicas para un mes. Si dayFilter (1-31) se indica, solo aplica las que tienen day_of_month === dayFilter (para el job diario). */
-export async function applyPeriodicTransfersForMonth(month, year, dayFilter = null) {
-  let list = await getPeriodicTransfers();
+/** Aplica transferencias periódicas para un mes (por usuario). */
+export async function applyPeriodicTransfersForMonth(userId, month, year, dayFilter = null) {
+  let list = await getPeriodicTransfers(userId);
   const m = month != null ? Number(month) : new Date().getMonth() + 1;
   const y = year != null ? Number(year) : new Date().getFullYear();
   if (dayFilter != null) {
@@ -1106,8 +1155,8 @@ export async function applyPeriodicTransfersForMonth(month, year, dayFilter = nu
   const nextYear = m === 12 ? y + 1 : y;
   const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
   const existing = await query(
-    'SELECT periodic_transfer_id FROM transfers WHERE periodic_transfer_id IS NOT NULL AND date >= $1 AND date < $2',
-    [startDate, endDate]
+    'SELECT periodic_transfer_id FROM transfers WHERE user_id = $1 AND periodic_transfer_id IS NOT NULL AND date >= $2 AND date < $3',
+    [userId, startDate, endDate]
   );
   const appliedIds = new Set(existing.rows.map((r) => r.periodic_transfer_id));
   const created = [];
@@ -1117,14 +1166,14 @@ export async function applyPeriodicTransfersForMonth(month, year, dayFilter = nu
     const lastDay = new Date(y, m, 0).getDate();
     const d = Math.min(day, lastDay);
     const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}T12:00:00.000Z`;
-    const t = await createTransfer({
+    const t = await createTransfer(userId, {
       fromAccountId: pt.fromAccountId,
       toAccountId: pt.toAccountId,
       amount: pt.amount,
       description: pt.description || undefined,
       periodicTransferId: pt.id,
     });
-    await query('UPDATE transfers SET date = $1 WHERE id = $2', [dateStr, t.id]);
+    await query('UPDATE transfers SET date = $1 WHERE id = $2 AND user_id = $3', [dateStr, t.id, userId]);
     created.push({ ...t, date: dateStr });
     appliedIds.add(pt.id);
   }
@@ -1132,8 +1181,8 @@ export async function applyPeriodicTransfersForMonth(month, year, dayFilter = nu
 }
 
 /** Aplica una sola transferencia periódica por id para el mes/año indicado. */
-export async function applySinglePeriodicTransfer(id, month, year) {
-  const pt = await getPeriodicTransfer(id);
+export async function applySinglePeriodicTransfer(userId, id, month, year) {
+  const pt = await getPeriodicTransfer(userId, id);
   if (!pt) return null;
   const m = month != null ? Number(month) : new Date().getMonth() + 1;
   const y = year != null ? Number(year) : new Date().getFullYear();
@@ -1142,37 +1191,37 @@ export async function applySinglePeriodicTransfer(id, month, year) {
   const nextYear = m === 12 ? y + 1 : y;
   const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
   const existing = await query(
-    'SELECT id FROM transfers WHERE periodic_transfer_id = $1 AND date >= $2 AND date < $3',
-    [id, startDate, endDate]
+    'SELECT id FROM transfers WHERE user_id = $1 AND periodic_transfer_id = $2 AND date >= $3 AND date < $4',
+    [userId, id, startDate, endDate]
   );
   if (existing.rows.length > 0) return null;
   const day = pt.dayOfMonth != null ? pt.dayOfMonth : 1;
   const lastDay = new Date(y, m, 0).getDate();
   const d = Math.min(day, lastDay);
   const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}T12:00:00.000Z`;
-  const t = await createTransfer({
+  const t = await createTransfer(userId, {
     fromAccountId: pt.fromAccountId,
     toAccountId: pt.toAccountId,
     amount: pt.amount,
     description: pt.description || undefined,
     periodicTransferId: pt.id,
   });
-  await query('UPDATE transfers SET date = $1 WHERE id = $2', [dateStr, t.id]);
+  await query('UPDATE transfers SET date = $1 WHERE id = $2 AND user_id = $3', [dateStr, t.id, userId]);
   return { ...t, date: dateStr };
 }
 
-export async function deleteTransfer(id) {
-  const t = await getTransfer(id);
+export async function deleteTransfer(userId, id) {
+  const t = await getTransfer(userId, id);
   if (!t) return false;
-  await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [t.amount, t.fromAccountId]);
-  await query('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [t.amount, t.toAccountId]);
-  const { rowCount } = await query('DELETE FROM transfers WHERE id = $1', [id]);
+  await query('UPDATE accounts SET balance = balance + $1 WHERE id = $2 AND user_id = $3', [t.amount, t.fromAccountId, userId]);
+  await query('UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND user_id = $3', [t.amount, t.toAccountId, userId]);
+  const { rowCount } = await query('DELETE FROM transfers WHERE id = $1 AND user_id = $2', [id, userId]);
   return rowCount > 0;
 }
 
-// --- App settings (key-value, extensible) ---
-export async function getAppSettings() {
-  const { rows } = await query('SELECT key, value FROM app_settings');
+// --- App settings (key-value por usuario) ---
+export async function getAppSettings(userId) {
+  const { rows } = await query('SELECT key, value FROM app_settings WHERE user_id = $1', [userId]);
   const out = {};
   for (const row of rows) {
     try {
@@ -1184,16 +1233,16 @@ export async function getAppSettings() {
   return out;
 }
 
-export async function updateAppSettings(patch) {
-  if (!patch || typeof patch !== 'object') return getAppSettings();
+export async function updateAppSettings(userId, patch) {
+  if (!patch || typeof patch !== 'object') return getAppSettings(userId);
   for (const [key, value] of Object.entries(patch)) {
     const val = JSON.stringify(value === undefined ? null : value);
     await query(
-      'INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2',
-      [key, val]
+      'INSERT INTO app_settings (user_id, key, value) VALUES ($1, $2, $3) ON CONFLICT (user_id, key) DO UPDATE SET value = $3',
+      [userId, key, val]
     );
   }
-  return getAppSettings();
+  return getAppSettings(userId);
 }
 
 // --- Crypto: holdings, price cache (CoinGecko), daily close ---
@@ -1215,13 +1264,19 @@ function rowCryptoHolding(r) {
   };
 }
 
-export async function getCryptoHoldings() {
-  const { rows } = await query('SELECT id, symbol, amount_invested, price_bought, currency, created_at FROM crypto_holdings ORDER BY id');
+export async function getCryptoHoldings(userId) {
+  const { rows } = await query(
+    'SELECT id, symbol, amount_invested, price_bought, currency, created_at FROM crypto_holdings WHERE user_id = $1 ORDER BY id',
+    [userId]
+  );
   return rows.map(rowCryptoHolding);
 }
 
-export async function getCryptoHolding(id) {
-  const { rows } = await query('SELECT id, symbol, amount_invested, price_bought, currency, created_at FROM crypto_holdings WHERE id = $1', [id]);
+export async function getCryptoHolding(userId, id) {
+  const { rows } = await query(
+    'SELECT id, symbol, amount_invested, price_bought, currency, created_at FROM crypto_holdings WHERE id = $1 AND user_id = $2',
+    [id, userId]
+  );
   return rowCryptoHolding(rows[0]);
 }
 
@@ -1230,16 +1285,16 @@ function cryptoCurrency(currency) {
   return 'EUR';
 }
 
-export async function createCryptoHolding({ symbol, amountInvested, priceBought, currency = 'EUR' }) {
+export async function createCryptoHolding(userId, { symbol, amountInvested, priceBought, currency = 'EUR' }) {
   const curr = cryptoCurrency(currency);
   const { rows } = await query(
-    'INSERT INTO crypto_holdings (symbol, amount_invested, price_bought, currency) VALUES ($1, $2, $3, $4) RETURNING id, symbol, amount_invested, price_bought, currency, created_at',
-    [String(symbol).trim().toLowerCase(), Number(amountInvested) || 0, Number(priceBought) || 0, curr]
+    'INSERT INTO crypto_holdings (user_id, symbol, amount_invested, price_bought, currency) VALUES ($1, $2, $3, $4, $5) RETURNING id, symbol, amount_invested, price_bought, currency, created_at',
+    [userId, String(symbol).trim().toLowerCase(), Number(amountInvested) || 0, Number(priceBought) || 0, curr]
   );
   return rowCryptoHolding(rows[0]);
 }
 
-export async function updateCryptoHolding(id, { symbol, amountInvested, priceBought, currency }) {
+export async function updateCryptoHolding(userId, id, { symbol, amountInvested, priceBought, currency }) {
   const updates = [];
   const params = [];
   let n = 1;
@@ -1259,17 +1314,17 @@ export async function updateCryptoHolding(id, { symbol, amountInvested, priceBou
     updates.push(`currency = $${n++}`);
     params.push(cryptoCurrency(currency));
   }
-  if (updates.length === 0) return getCryptoHolding(id);
-  params.push(id);
+  if (updates.length === 0) return getCryptoHolding(userId, id);
+  params.push(id, userId);
   const { rows } = await query(
-    `UPDATE crypto_holdings SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, symbol, amount_invested, price_bought, currency, created_at`,
+    `UPDATE crypto_holdings SET ${updates.join(', ')} WHERE id = $${n} AND user_id = $${n + 1} RETURNING id, symbol, amount_invested, price_bought, currency, created_at`,
     params
   );
   return rowCryptoHolding(rows[0]);
 }
 
-export async function deleteCryptoHolding(id) {
-  const { rowCount } = await query('DELETE FROM crypto_holdings WHERE id = $1', [id]);
+export async function deleteCryptoHolding(userId, id) {
+  const { rowCount } = await query('DELETE FROM crypto_holdings WHERE id = $1 AND user_id = $2', [id, userId]);
   return rowCount > 0;
 }
 
@@ -1336,13 +1391,13 @@ export async function getCryptoPrices(symbols) {
   );
 }
 
-/** Cierre diario: se ejecuta a 00:00. Inserta fila con la fecha del día que acaba de terminar (ayer). */
-export async function runCryptoDailyClose() {
-  const holdings = await getCryptoHoldings();
+/** Cierre diario por usuario: se ejecuta a 00:00. Inserta fila con la fecha del día que acaba de terminar (ayer). */
+export async function runCryptoDailyClose(userId) {
+  const holdings = await getCryptoHoldings(userId);
   if (holdings.length === 0) return { inserted: false, reason: 'no_holdings' };
   const symbols = [...new Set(holdings.map((h) => h.symbol))];
   const prices = await getCryptoPrices(symbols);
-  const settings = await getAppSettings();
+  const settings = await getAppSettings(userId);
   const rate = Number(settings.exchangeRateUsdToEur) || 0.92;
 
   let totalEur = 0;
@@ -1359,18 +1414,18 @@ export async function runCryptoDailyClose() {
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
   const dateStr = yesterday.toISOString().slice(0, 10);
   const prev = await query(
-    'SELECT total_value_eur, total_value_usd FROM crypto_daily_close WHERE date < $1 ORDER BY date DESC LIMIT 1',
-    [dateStr]
+    'SELECT total_value_eur, total_value_usd FROM crypto_daily_close WHERE user_id = $1 AND date < $2 ORDER BY date DESC LIMIT 1',
+    [userId, dateStr]
   );
   const prevEur = prev.rows[0] ? Number(prev.rows[0].total_value_eur) : 0;
   const prevUsd = prev.rows[0] ? Number(prev.rows[0].total_value_usd) : 0;
   const gainLossEur = totalEur - prevEur;
   const gainLossUsd = totalUsd - prevUsd;
   await query(
-    `INSERT INTO crypto_daily_close (date, total_value_eur, total_value_usd, gain_loss_eur, gain_loss_usd)
-     VALUES ($1, $2, $3, $4, $5) ON CONFLICT (date) DO UPDATE SET
-     total_value_eur = $2, total_value_usd = $3, gain_loss_eur = $4, gain_loss_usd = $5`,
-    [dateStr, totalEur, totalUsd, gainLossEur, gainLossUsd]
+    `INSERT INTO crypto_daily_close (user_id, date, total_value_eur, total_value_usd, gain_loss_eur, gain_loss_usd)
+     VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (user_id, date) DO UPDATE SET
+     total_value_eur = $3, total_value_usd = $4, gain_loss_eur = $5, gain_loss_usd = $6`,
+    [userId, dateStr, totalEur, totalUsd, gainLossEur, gainLossUsd]
   );
 
   for (const h of holdings) {
@@ -1391,8 +1446,8 @@ export async function runCryptoDailyClose() {
   return { inserted: true, date: dateStr, totalEur, totalUsd, gainLossEur, gainLossUsd };
 }
 
-export async function getCryptoDailyCloseByDate(dateStr) {
-  const { rows } = await query('SELECT date FROM crypto_daily_close WHERE date = $1', [dateStr]);
+export async function getCryptoDailyCloseByDate(userId, dateStr) {
+  const { rows } = await query('SELECT date FROM crypto_daily_close WHERE user_id = $1 AND date = $2', [userId, dateStr]);
   return rows[0] || null;
 }
 
@@ -1422,18 +1477,19 @@ export async function getCryptoHoldingDailyHistory(holdingId, year, month) {
   return list.reverse();
 }
 
-export async function getCryptoDailyCloseHistory(year, month) {
-  let sql = 'SELECT date, total_value_eur, total_value_usd, gain_loss_eur, gain_loss_usd FROM crypto_daily_close';
-  const params = [];
+export async function getCryptoDailyCloseHistory(userId, year, month) {
+  let sql = 'SELECT date, total_value_eur, total_value_usd, gain_loss_eur, gain_loss_usd FROM crypto_daily_close WHERE user_id = $1';
+  const params = [userId];
+  let n = 2;
   if (year != null && month != null) {
-    sql += ' WHERE EXTRACT(YEAR FROM date) = $1 AND EXTRACT(MONTH FROM date) = $2';
+    sql += ` AND EXTRACT(YEAR FROM date) = $${n++} AND EXTRACT(MONTH FROM date) = $${n++}`;
     params.push(year, month);
   } else if (year != null) {
-    sql += ' WHERE EXTRACT(YEAR FROM date) = $1';
+    sql += ` AND EXTRACT(YEAR FROM date) = $${n++}`;
     params.push(year);
   }
   sql += ' ORDER BY date DESC';
-  const { rows } = await query(sql, params.length ? params : undefined);
+  const { rows } = await query(sql, params);
   return rows.map((r) => ({
     date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : r.date,
     totalValueEur: Number(r.total_value_eur),
@@ -1443,9 +1499,9 @@ export async function getCryptoDailyCloseHistory(year, month) {
   }));
 }
 
-/** True si hay al menos una posición en crypto (para mostrar menú). */
-export async function hasCryptoHoldings() {
-  const { rows } = await query('SELECT 1 FROM crypto_holdings LIMIT 1');
+/** True si hay al menos una posición en crypto para el usuario (para mostrar menú). */
+export async function hasCryptoHoldings(userId) {
+  const { rows } = await query('SELECT 1 FROM crypto_holdings WHERE user_id = $1 LIMIT 1', [userId]);
   return (rows?.length ?? 0) > 0;
 }
 
@@ -1466,13 +1522,19 @@ function rowStockHolding(r) {
   };
 }
 
-export async function getStockHoldings() {
-  const { rows } = await query('SELECT id, symbol, amount_invested, price_bought, currency, created_at FROM stock_holdings ORDER BY id');
+export async function getStockHoldings(userId) {
+  const { rows } = await query(
+    'SELECT id, symbol, amount_invested, price_bought, currency, created_at FROM stock_holdings WHERE user_id = $1 ORDER BY id',
+    [userId]
+  );
   return rows.map(rowStockHolding);
 }
 
-export async function getStockHolding(id) {
-  const { rows } = await query('SELECT id, symbol, amount_invested, price_bought, currency, created_at FROM stock_holdings WHERE id = $1', [id]);
+export async function getStockHolding(userId, id) {
+  const { rows } = await query(
+    'SELECT id, symbol, amount_invested, price_bought, currency, created_at FROM stock_holdings WHERE id = $1 AND user_id = $2',
+    [id, userId]
+  );
   return rowStockHolding(rows[0]);
 }
 
@@ -1567,12 +1629,11 @@ export async function fetchStockPriceFromApi(symbol) {
   }
 }
 
-export async function getStockPrices(symbols) {
+export async function getStockPrices(symbols, userId = null) {
   if (!symbols || symbols.length === 0) return {};
   const unique = [...new Set(symbols.map((s) => String(s).trim().toUpperCase()).filter(Boolean))];
   const out = {};
-  const settings = await getAppSettings();
-  const rate = Number(settings.exchangeRateUsdToEur) || 0.92;
+  const rate = userId != null ? Number((await getAppSettings(userId)).exchangeRateUsdToEur) || 0.92 : 0.92;
   for (const sym of unique) {
     const fromApi = await fetchStockPriceFromApi(sym);
     if (fromApi) {
@@ -1587,7 +1648,7 @@ export async function getStockPrices(symbols) {
   return out;
 }
 
-export async function hasStockHoldings() {
-  const { rows } = await query('SELECT 1 FROM stock_holdings LIMIT 1');
+export async function hasStockHoldings(userId) {
+  const { rows } = await query('SELECT 1 FROM stock_holdings WHERE user_id = $1 LIMIT 1', [userId]);
   return (rows?.length ?? 0) > 0;
 }

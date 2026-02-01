@@ -5,7 +5,7 @@ const router = Router();
 
 router.get('/', async (req, res) => {
   try {
-    const settings = await store.getAppSettings();
+    const settings = await store.getAppSettings(req.userId);
     res.json(settings);
   } catch (err) {
     console.error(err);
@@ -19,7 +19,7 @@ router.put('/', async (req, res) => {
     if (!patch || typeof patch !== 'object') {
       return res.status(400).json({ error: 'Body debe ser un objeto con las claves a actualizar' });
     }
-    const settings = await store.updateAppSettings(patch);
+    const settings = await store.updateAppSettings(req.userId, patch);
     res.json(settings);
   } catch (err) {
     console.error(err);

@@ -5,7 +5,7 @@ const router = Router();
 
 router.get('/', async (req, res) => {
   try {
-    const transfers = await store.getTransfers();
+    const transfers = await store.getTransfers(req.userId);
     res.json(transfers);
   } catch (err) {
     console.error(err);
@@ -42,7 +42,7 @@ router.post('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const t = await store.getTransfer(id);
+    const t = await store.getTransfer(req.userId, id);
     if (!t) return res.status(404).json({ error: 'Transferencia no encontrada' });
     res.json(t);
   } catch (err) {
@@ -54,7 +54,7 @@ router.get('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const deleted = await store.deleteTransfer(id);
+    const deleted = await store.deleteTransfer(req.userId, id);
     if (!deleted) return res.status(404).json({ error: 'Transferencia no encontrada' });
     res.status(204).send();
   } catch (err) {
