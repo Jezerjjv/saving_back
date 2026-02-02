@@ -1543,16 +1543,16 @@ function stockCurrency(currency) {
   return 'USD';
 }
 
-export async function createStockHolding({ symbol, amountInvested, priceBought, currency = 'USD' }) {
+export async function createStockHolding(userId, { symbol, amountInvested, priceBought, currency = 'USD' }) {
   const curr = stockCurrency(currency);
   const { rows } = await query(
-    'INSERT INTO stock_holdings (symbol, amount_invested, price_bought, currency) VALUES ($1, $2, $3, $4) RETURNING id, symbol, amount_invested, price_bought, currency, created_at',
-    [String(symbol).trim().toUpperCase(), Number(amountInvested) || 0, Number(priceBought) || 0, curr]
+    'INSERT INTO stock_holdings (user_id, symbol, amount_invested, price_bought, currency) VALUES ($1, $2, $3, $4, $5) RETURNING id, symbol, amount_invested, price_bought, currency, created_at',
+    [userId, String(symbol).trim().toUpperCase(), Number(amountInvested) || 0, Number(priceBought) || 0, curr]
   );
   return rowStockHolding(rows[0]);
 }
 
-export async function updateStockHolding(id, { symbol, amountInvested, priceBought, currency }) {
+export async function updateStockHolding(userId, id, { symbol, amountInvested, priceBought, currency }) {
   const updates = [];
   const params = [];
   let n = 1;
@@ -1572,17 +1572,17 @@ export async function updateStockHolding(id, { symbol, amountInvested, priceBoug
     updates.push(`currency = $${n++}`);
     params.push(stockCurrency(currency));
   }
-  if (updates.length === 0) return getStockHolding(id);
-  params.push(id);
+  if (updates.length === 0) return getStockHolding(userId, id);
+  params.push(id, userId);
   const { rows } = await query(
-    `UPDATE stock_holdings SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, symbol, amount_invested, price_bought, currency, created_at`,
+    `UPDATE stock_holdings SET ${updates.join(', ')} WHERE id = $${n} AND user_id = $${n + 1} RETURNING id, symbol, amount_invested, price_bought, currency, created_at`,
     params
   );
   return rowStockHolding(rows[0]);
 }
 
-export async function deleteStockHolding(id) {
-  const { rowCount } = await query('DELETE FROM stock_holdings WHERE id = $1', [id]);
+export async function deleteStockHolding(userId, id) {
+  const { rowCount } = await query('DELETE FROM stock_holdings WHERE id = $1 AND user_id = $2', [id, userId]);
   return rowCount > 0;
 }
 

@@ -16,7 +16,7 @@ router.get('/holdings', async (req, res) => {
 router.get('/holdings/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const item = await store.getStockHolding(id);
+    const item = await store.getStockHolding(req.userId, id);
     if (!item) return res.status(404).json({ error: 'Posición no encontrada' });
     res.json(item);
   } catch (err) {
@@ -65,7 +65,7 @@ router.put('/holdings/:id', async (req, res) => {
 router.delete('/holdings/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const deleted = await store.deleteStockHolding(id);
+    const deleted = await store.deleteStockHolding(req.userId, id);
     if (!deleted) return res.status(404).json({ error: 'Posición no encontrada' });
     res.status(204).send();
   } catch (err) {
