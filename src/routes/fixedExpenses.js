@@ -38,10 +38,10 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const existing = await store.getFixedExpense(id);
+    const existing = await store.getFixedExpense(req.userId, id);
     if (!existing) return res.status(404).json({ error: 'Gasto fijo no encontrado' });
     const { name, categoryId, amount, accountId, dayOfMonth } = req.body;
-    const fixed = await store.updateFixedExpense(id, {
+    const fixed = await store.updateFixedExpense(req.userId, id, {
       name: name !== undefined ? String(name).trim() : undefined,
       categoryId: categoryId !== undefined ? (categoryId == null ? null : Number(categoryId)) : undefined,
       amount: amount !== undefined ? Number(amount) : undefined,
