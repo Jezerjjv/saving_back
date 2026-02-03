@@ -1391,59 +1391,99 @@ export async function getCryptoPrices(symbols) {
   );
 }
 
-/** Cierre diario por usuario: se ejecuta a 00:00. Inserta fila con la fecha del día que acaba de terminar (ayer). */
+/** Cierre diario por usuario: escribe ayer (cierre del día que terminó) y hoy (valor actual). Así el histórico muestra siempre ayer + hoy. */
 export async function runCryptoDailyClose(userId) {
-  const holdings = await getCryptoHoldings(userId);
-  if (holdings.length === 0) return { inserted: false, reason: 'no_holdings' };
-  const symbols = [...new Set(holdings.map((h) => h.symbol))];
-  const prices = await getCryptoPrices(symbols);
-  const settings = await getAppSettings(userId);
-  const rate = Number(settings.exchangeRateUsdToEur) || 0.92;
+  try {
+    const holdings = await getCryptoHoldings(userId);
+    if (holdings.length === 0) return { inserted: false, reason: 'no_holdings' };
+    const symbols = [...new Set(holdings.map((h) => h.symbol))];
+    const prices = await getCryptoPrices(symbols);
+    const settings = await getAppSettings(userId);
+    const rate = Number(settings.exchangeRateUsdToEur) || 0.92;
 
-  let totalEur = 0;
-  let totalUsd = 0;
-  for (const h of holdings) {
-    const p = prices[h.symbol];
-    if (p) {
-      const coins = h.amountCoins;
-      totalEur += coins * p.priceEur;
-      totalUsd += coins * p.priceUsd;
+    let totalEur = 0;
+    let totalUsd = 0;
+    for (const h of holdings) {
+      const p = prices[h.symbol];
+      if (p) {
+        const coins = h.amountCoins;
+        totalEur += coins * p.priceEur;
+        totalUsd += coins * p.priceUsd;
+      }
     }
-  }
-  const now = new Date();
-  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  const dateStr = yesterday.toISOString().slice(0, 10);
-  const prev = await query(
-    'SELECT total_value_eur, total_value_usd FROM crypto_daily_close WHERE user_id = $1 AND date < $2 ORDER BY date DESC LIMIT 1',
-    [userId, dateStr]
-  );
-  const prevEur = prev.rows[0] ? Number(prev.rows[0].total_value_eur) : 0;
-  const prevUsd = prev.rows[0] ? Number(prev.rows[0].total_value_usd) : 0;
-  const gainLossEur = totalEur - prevEur;
-  const gainLossUsd = totalUsd - prevUsd;
-  await query(
-    `INSERT INTO crypto_daily_close (user_id, date, total_value_eur, total_value_usd, gain_loss_eur, gain_loss_usd)
-     VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (user_id, date) DO UPDATE SET
-     total_value_eur = $3, total_value_usd = $4, gain_loss_eur = $5, gain_loss_usd = $6`,
-    [userId, dateStr, totalEur, totalUsd, gainLossEur, gainLossUsd]
-  );
+    const now = new Date();
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+    const todayStr = today.toISOString().slice(0, 10);
 
-  for (const h of holdings) {
-    const p = prices[h.symbol];
-    const currentEur = p ? h.amountCoins * p.priceEur : 0;
-    const currentUsd = p ? h.amountCoins * p.priceUsd : 0;
-    const investedEur = h.currency === 'EUR' ? h.amountInvested : h.amountInvested * rate;
-    const investedUsd = h.currency === 'EUR' ? h.amountInvested / rate : h.amountInvested;
-    const glEur = currentEur - investedEur;
-    const glUsd = currentUsd - investedUsd;
-    await query(
-      `INSERT INTO crypto_holding_daily (holding_id, date, gain_loss_eur, gain_loss_usd)
-       VALUES ($1, $2, $3, $4) ON CONFLICT (holding_id, date) DO UPDATE SET gain_loss_eur = $3, gain_loss_usd = $4`,
-      [h.id, dateStr, glEur, glUsd]
+    // 1) Escribir ayer: valor actual como cierre de ayer; G/P vs el día anterior
+    const prev = await query(
+      'SELECT total_value_eur, total_value_usd FROM crypto_daily_close WHERE user_id = $1 AND date < $2 ORDER BY date DESC LIMIT 1',
+      [userId, yesterdayStr]
     );
-  }
+    const prevEur = prev.rows[0] ? Number(prev.rows[0].total_value_eur) : 0;
+    const prevUsd = prev.rows[0] ? Number(prev.rows[0].total_value_usd) : 0;
+    const gainLossYesterdayEur = totalEur - prevEur;
+    const gainLossYesterdayUsd = totalUsd - prevUsd;
+    await query(
+      `INSERT INTO crypto_daily_close (user_id, date, total_value_eur, total_value_usd, gain_loss_eur, gain_loss_usd)
+       VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (user_id, date) DO UPDATE SET
+       total_value_eur = $3, total_value_usd = $4, gain_loss_eur = $5, gain_loss_usd = $6`,
+      [userId, yesterdayStr, totalEur, totalUsd, gainLossYesterdayEur, gainLossYesterdayUsd]
+    );
 
-  return { inserted: true, date: dateStr, totalEur, totalUsd, gainLossEur, gainLossUsd };
+    for (const h of holdings) {
+      const p = prices[h.symbol];
+      const currentEur = p ? h.amountCoins * p.priceEur : 0;
+      const currentUsd = p ? h.amountCoins * p.priceUsd : 0;
+      const investedEur = h.currency === 'EUR' ? h.amountInvested : h.amountInvested * rate;
+      const investedUsd = h.currency === 'EUR' ? h.amountInvested / rate : h.amountInvested;
+      const glEur = currentEur - investedEur;
+      const glUsd = currentUsd - investedUsd;
+      await query(
+        `INSERT INTO crypto_holding_daily (holding_id, date, gain_loss_eur, gain_loss_usd)
+         VALUES ($1, $2, $3, $4) ON CONFLICT (holding_id, date) DO UPDATE SET gain_loss_eur = $3, gain_loss_usd = $4`,
+        [h.id, yesterdayStr, glEur, glUsd]
+      );
+    }
+
+    // 2) Escribir hoy: valor actual; G/P del día = valor_hoy - valor_ayer (leyendo ayer de BD)
+    const yesterdayRow = await query(
+      'SELECT total_value_eur, total_value_usd FROM crypto_daily_close WHERE user_id = $1 AND date = $2',
+      [userId, yesterdayStr]
+    );
+    const yesterdayEur = yesterdayRow.rows[0] ? Number(yesterdayRow.rows[0].total_value_eur) : totalEur;
+    const yesterdayUsd = yesterdayRow.rows[0] ? Number(yesterdayRow.rows[0].total_value_usd) : totalUsd;
+    const gainLossTodayEur2 = totalEur - yesterdayEur;
+    const gainLossTodayUsd2 = totalUsd - yesterdayUsd;
+    await query(
+      `INSERT INTO crypto_daily_close (user_id, date, total_value_eur, total_value_usd, gain_loss_eur, gain_loss_usd)
+       VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (user_id, date) DO UPDATE SET
+       total_value_eur = $3, total_value_usd = $4, gain_loss_eur = $5, gain_loss_usd = $6`,
+      [userId, todayStr, totalEur, totalUsd, gainLossTodayEur2, gainLossTodayUsd2]
+    );
+
+    for (const h of holdings) {
+      const p = prices[h.symbol];
+      const currentEur = p ? h.amountCoins * p.priceEur : 0;
+      const currentUsd = p ? h.amountCoins * p.priceUsd : 0;
+      const investedEur = h.currency === 'EUR' ? h.amountInvested : h.amountInvested * rate;
+      const investedUsd = h.currency === 'EUR' ? h.amountInvested / rate : h.amountInvested;
+      const glEur = currentEur - investedEur;
+      const glUsd = currentUsd - investedUsd;
+      await query(
+        `INSERT INTO crypto_holding_daily (holding_id, date, gain_loss_eur, gain_loss_usd)
+         VALUES ($1, $2, $3, $4) ON CONFLICT (holding_id, date) DO UPDATE SET gain_loss_eur = $3, gain_loss_usd = $4`,
+        [h.id, todayStr, glEur, glUsd]
+      );
+    }
+
+    return { inserted: true, date: todayStr, totalEur, totalUsd, gainLossEur: gainLossTodayEur2, gainLossUsd: gainLossTodayUsd2 };
+  } catch (err) {
+    console.error('[runCryptoDailyClose]', err.message || err);
+    return { inserted: false, error: err.message };
+  }
 }
 
 export async function getCryptoDailyCloseByDate(userId, dateStr) {
@@ -1453,28 +1493,33 @@ export async function getCryptoDailyCloseByDate(userId, dateStr) {
 
 /** Historial diario de G/P por holding. Devuelve cierres ordenados por fecha DESC; G/P del día = cierre - cierre anterior. */
 export async function getCryptoHoldingDailyHistory(holdingId, year, month) {
-  let sql = 'SELECT date, gain_loss_eur, gain_loss_usd FROM crypto_holding_daily WHERE holding_id = $1';
-  const params = [holdingId];
-  if (year != null && month != null) {
-    sql += ' AND EXTRACT(YEAR FROM date) = $2 AND EXTRACT(MONTH FROM date) = $3';
-    params.push(year, month);
-  } else if (year != null) {
-    sql += ' AND EXTRACT(YEAR FROM date) = $2';
-    params.push(year);
+  try {
+    let sql = 'SELECT date, gain_loss_eur, gain_loss_usd FROM crypto_holding_daily WHERE holding_id = $1';
+    const params = [holdingId];
+    if (year != null && month != null) {
+      sql += ' AND EXTRACT(YEAR FROM date) = $2 AND EXTRACT(MONTH FROM date) = $3';
+      params.push(year, month);
+    } else if (year != null) {
+      sql += ' AND EXTRACT(YEAR FROM date) = $2';
+      params.push(year);
+    }
+    sql += ' ORDER BY date ASC';
+    const { rows } = await query(sql, params.length > 1 ? params : [holdingId]);
+    const list = rows.map((r) => ({
+      date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date || '').slice(0, 10),
+      gainLossEur: Number(r.gain_loss_eur) || 0,
+      gainLossUsd: Number(r.gain_loss_usd) || 0,
+    }));
+    for (let i = list.length - 1; i >= 0; i--) {
+      const prev = i > 0 ? list[i - 1] : null;
+      list[i].dailyEur = prev != null ? list[i].gainLossEur - prev.gainLossEur : list[i].gainLossEur;
+      list[i].dailyUsd = prev != null ? list[i].gainLossUsd - prev.gainLossUsd : list[i].gainLossUsd;
+    }
+    return list.reverse();
+  } catch (err) {
+    console.error('[getCryptoHoldingDailyHistory]', holdingId, year, month, err.message || err);
+    return [];
   }
-  sql += ' ORDER BY date ASC';
-  const { rows } = await query(sql, params.length > 1 ? params : [holdingId]);
-  const list = rows.map((r) => ({
-    date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : r.date,
-    gainLossEur: Number(r.gain_loss_eur),
-    gainLossUsd: Number(r.gain_loss_usd),
-  }));
-  for (let i = list.length - 1; i >= 0; i--) {
-    const prev = i > 0 ? list[i - 1] : null;
-    list[i].dailyEur = prev != null ? list[i].gainLossEur - prev.gainLossEur : list[i].gainLossEur;
-    list[i].dailyUsd = prev != null ? list[i].gainLossUsd - prev.gainLossUsd : list[i].gainLossUsd;
-  }
-  return list.reverse();
 }
 
 export async function getCryptoDailyCloseHistory(userId, year, month) {
@@ -1651,4 +1696,77 @@ export async function getStockPrices(symbols, userId = null) {
 export async function hasStockHoldings(userId) {
   const { rows } = await query('SELECT 1 FROM stock_holdings WHERE user_id = $1 LIMIT 1', [userId]);
   return (rows?.length ?? 0) > 0;
+}
+
+/** Cierre diario acciones: escribe ayer y hoy con el valor actual (precio caché) para cada holding. */
+export async function runStockDailyClose(userId) {
+  try {
+    const holdings = await getStockHoldings(userId);
+    if (holdings.length === 0) return { inserted: false, reason: 'no_holdings' };
+    const symbols = [...new Set(holdings.map((h) => h.symbol))];
+    const prices = await getStockPrices(symbols, userId);
+    const settings = await getAppSettings(userId);
+    const rate = Number(settings.exchangeRateUsdToEur) || 0.92;
+
+    const now = new Date();
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+    const todayStr = today.toISOString().slice(0, 10);
+
+    for (const h of holdings) {
+      const p = prices[h.symbol];
+      const currentEur = p ? h.amountShares * p.priceEur : 0;
+      const currentUsd = p ? h.amountShares * p.priceUsd : 0;
+      const investedEur = h.currency === 'EUR' ? h.amountInvested : h.amountInvested * rate;
+      const investedUsd = h.currency === 'EUR' ? h.amountInvested / rate : h.amountInvested;
+      const glEur = currentEur - investedEur;
+      const glUsd = currentUsd - investedUsd;
+      await query(
+        `INSERT INTO stock_holding_daily (holding_id, date, gain_loss_eur, gain_loss_usd)
+         VALUES ($1, $2, $3, $4) ON CONFLICT (holding_id, date) DO UPDATE SET gain_loss_eur = $3, gain_loss_usd = $4`,
+        [h.id, yesterdayStr, glEur, glUsd]
+      );
+      await query(
+        `INSERT INTO stock_holding_daily (holding_id, date, gain_loss_eur, gain_loss_usd)
+         VALUES ($1, $2, $3, $4) ON CONFLICT (holding_id, date) DO UPDATE SET gain_loss_eur = $3, gain_loss_usd = $4`,
+        [h.id, todayStr, glEur, glUsd]
+      );
+    }
+    return { inserted: true, date: todayStr };
+  } catch (err) {
+    console.error('[runStockDailyClose]', err.message || err);
+    return { inserted: false, error: err.message };
+  }
+}
+
+/** Historial diario de G/P por holding de acciones. Misma estructura que getCryptoHoldingDailyHistory. */
+export async function getStockHoldingDailyHistory(holdingId, year, month) {
+  try {
+    let sql = 'SELECT date, gain_loss_eur, gain_loss_usd FROM stock_holding_daily WHERE holding_id = $1';
+    const params = [holdingId];
+    if (year != null && month != null) {
+      sql += ' AND EXTRACT(YEAR FROM date) = $2 AND EXTRACT(MONTH FROM date) = $3';
+      params.push(year, month);
+    } else if (year != null) {
+      sql += ' AND EXTRACT(YEAR FROM date) = $2';
+      params.push(year);
+    }
+    sql += ' ORDER BY date ASC';
+    const { rows } = await query(sql, params.length > 1 ? params : [holdingId]);
+    const list = rows.map((r) => ({
+      date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date || '').slice(0, 10),
+      gainLossEur: Number(r.gain_loss_eur) || 0,
+      gainLossUsd: Number(r.gain_loss_usd) || 0,
+    }));
+    for (let i = list.length - 1; i >= 0; i--) {
+      const prev = i > 0 ? list[i - 1] : null;
+      list[i].dailyEur = prev != null ? list[i].gainLossEur - prev.gainLossEur : list[i].gainLossEur;
+      list[i].dailyUsd = prev != null ? list[i].gainLossUsd - prev.gainLossUsd : list[i].gainLossUsd;
+    }
+    return list.reverse();
+  } catch (err) {
+    console.error('[getStockHoldingDailyHistory]', holdingId, year, month, err.message || err);
+    return [];
+  }
 }

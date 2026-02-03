@@ -208,6 +208,16 @@ CREATE TABLE IF NOT EXISTS stock_price_cache (
   price_eur  NUMERIC(18, 8) NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE TABLE IF NOT EXISTS stock_holding_daily (
+  id             SERIAL PRIMARY KEY,
+  holding_id     INTEGER NOT NULL REFERENCES stock_holdings(id) ON DELETE CASCADE,
+  date           DATE NOT NULL,
+  gain_loss_eur  NUMERIC(18, 4) NOT NULL,
+  gain_loss_usd  NUMERIC(18, 4) NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (holding_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_stock_holding_daily_holding_date ON stock_holding_daily(holding_id, date);
 
 -- Configuración de la app (key-value, extensible)
 CREATE TABLE IF NOT EXISTS app_settings (

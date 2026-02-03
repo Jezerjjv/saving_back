@@ -87,9 +87,10 @@ router.get('/prices', async (req, res) => {
   }
 });
 
-/** Historial de cierres diarios. Query: year, month (opcionales). */
+/** Historial de cierres diarios. Query: year, month (opcionales). Asegura ayer y hoy antes de devolver. */
 router.get('/daily-close', async (req, res) => {
   try {
+    await store.runCryptoDailyClose(req.userId).catch(() => {});
     const { year, month } = req.query;
     const y = year != null ? Number(year) : null;
     const m = month != null ? Number(month) : null;
@@ -112,9 +113,10 @@ router.get('/holdings/:id/daily-history', async (req, res) => {
     const m = month != null ? Number(month) : null;
     const history = await store.getCryptoHoldingDailyHistory(id, y, m);
     res.json(history);
+    store.runCryptoDailyClose(req.userId).catch(() => {});
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('[GET /crypto/holdings/:id/daily-history]', err.message, err.stack);
+    res.status(500).json({ error: err.message || 'Error al obtener el histórico' });
   }
 });
 

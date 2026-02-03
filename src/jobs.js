@@ -71,6 +71,16 @@ export async function runFixedDailyJob() {
           }
         }
       }
+      for (const uid of userIdsForCrypto) {
+        try {
+          const stockResult = await store.runStockDailyClose(uid);
+          if (stockResult.inserted) {
+            console.log(`[Job] Usuario ${uid} cierre acciones: ${yesterdayStr}.`);
+          }
+        } catch (stockErr) {
+          console.error(`[Job] Error cierre diario acciones usuario ${uid}:`, stockErr);
+        }
+      }
     }
   } catch (err) {
     console.error('[Job] Error aplicando fijos/intereses:', err);

@@ -42,7 +42,7 @@ router.get('/monthly-summary', async (req, res) => {
 router.get('/daily-indicators', async (req, res) => {
   try {
     const { year } = req.query;
-    const result = await store.getDailyIndicators(year ? Number(year) : null);
+    const result = await store.getDailyIndicators(req.userId, year ? Number(year) : null);
     res.json(result);
   } catch (err) {
     console.error(err);

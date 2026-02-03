@@ -96,4 +96,22 @@ router.get('/eligible', async (req, res) => {
   }
 });
 
+/** Historial diario de G/P de una posición. Query: year, month (opcionales). */
+router.get('/holdings/:id/daily-history', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const holding = await store.getStockHolding(req.userId, id);
+    if (!holding) return res.status(404).json({ error: 'Posición no encontrada' });
+    const { year, month } = req.query;
+    const y = year != null ? Number(year) : null;
+    const m = month != null ? Number(month) : null;
+    const history = await store.getStockHoldingDailyHistory(id, y, m);
+    res.json(history);
+    store.runStockDailyClose(req.userId).catch(() => {});
+  } catch (err) {
+    console.error('[GET /stocks/holdings/:id/daily-history]', err.message);
+    res.status(500).json({ error: err.message || 'Error al obtener el histórico' });
+  }
+});
+
 export default router;
