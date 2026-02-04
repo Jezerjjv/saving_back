@@ -58,7 +58,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const deleted = await store.deleteFixedIncome(id);
+    const deleted = await store.deleteFixedIncome(req.userId, id);
     if (!deleted) return res.status(404).json({ error: 'Ingreso fijo no encontrado' });
     res.status(204).send();
   } catch (err) {
