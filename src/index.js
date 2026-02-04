@@ -11,7 +11,7 @@ import fixedIncomesRouter from './routes/fixedIncomes.js';
 import fixedExpensesRouter from './routes/fixedExpenses.js';
 import quickTemplatesRouter from './routes/quickTemplates.js';
 import transfersRouter from './routes/transfers.js';
-import periodicTransfersRouter from './routes/periodicTransfers.js';
+import periodicTransfersRouter from './routes/periodicTransfers.js'; 
 import interestHistoryRouter from './routes/interestHistory.js';
 import cryptoRouter from './routes/crypto.js';
 import stocksRouter from './routes/stocks.js';
