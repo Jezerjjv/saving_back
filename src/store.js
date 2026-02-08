@@ -1,3 +1,4 @@
+// (marcador cambios - borrar si quieres)
 import { query } from './db.js';
 
 /** IDs de todos los usuarios (para jobs que se ejecutan por usuario). */
@@ -330,6 +331,16 @@ export async function applyDailyInterest(userId) {
     return { applied: 0, totalInterest: 0, skipped: false, reason: 'no_accounts' };
   }
 
+  // Si ya hay historial para hoy (p. ej. falló guardar lastInterestRunDate), no volver a aplicar
+  const { rows: existingToday } = await query(
+    'SELECT 1 FROM interest_history WHERE user_id = $1 AND date = $2 LIMIT 1',
+    [userId, today]
+  );
+  if (existingToday?.length > 0) {
+    await updateAppSettings(userId, { lastInterestRunDate: today });
+    return { applied: 0, totalInterest: 0, skipped: true, reason: 'already_today' };
+  }
+
   const { rowCount } = await query(
     `UPDATE accounts a
      SET balance = a.balance * sub.multiplier
@@ -348,15 +359,16 @@ export async function applyDailyInterest(userId) {
   const applied = rowCount ?? 0;
 
   if (applied > 0) {
-    await updateAppSettings(userId, { lastInterestRunDate: today });
+    // Primero insertar historial; solo después marcar el día (así un fallo en INSERT no deja el día marcado sin registros)
     for (const [accountId, { balance, multiplier }] of byAccount) {
       const amount = Math.round(balance * (multiplier - 1) * 100) / 100;
-      if (amount < 0.01) continue;
+      if (amount <= 0) continue;
       await query(
         `INSERT INTO interest_history (user_id, date, account_id, amount) VALUES ($1, $2, $3, $4)`,
         [userId, today, accountId, amount]
       );
     }
+    await updateAppSettings(userId, { lastInterestRunDate: today });
   }
   return {
     applied,
@@ -558,10 +570,13 @@ export async function getTransactionsGrouped(userId, month, year) {
   }));
 }
 
-/** Gastos del mes agrupados por categoría (para resumen mensual). */
-export async function getExpensesByCategory(userId, month, year) {
+/** Gastos del mes agrupados por categoría (para resumen mensual). accountId opcional: filtra por cuenta. */
+export async function getExpensesByCategory(userId, month, year, accountId = null) {
   const m = month != null ? Number(month) : new Date().getMonth() + 1;
   const y = year != null ? Number(year) : new Date().getFullYear();
+  const params = [userId, m, y];
+  const accountFilter = accountId != null ? ' AND t.account_id = $4' : '';
+  if (accountId != null) params.push(Number(accountId));
   const { rows } = await query(
     `SELECT
        t.category_id AS category_id,
@@ -572,10 +587,10 @@ export async function getExpensesByCategory(userId, month, year) {
      LEFT JOIN categories c ON c.id = t.category_id AND c.user_id = t.user_id
      WHERE t.user_id = $1 AND t.type = 'expense'
        AND EXTRACT(MONTH FROM t.date AT TIME ZONE 'UTC') = $2
-       AND EXTRACT(YEAR FROM t.date AT TIME ZONE 'UTC') = $3
+       AND EXTRACT(YEAR FROM t.date AT TIME ZONE 'UTC') = $3${accountFilter}
      GROUP BY t.category_id, c.name, c.icon
      ORDER BY total DESC`,
-    [userId, m, y]
+    params
   );
   return rows.map((r) => ({
     categoryId: r.category_id,
@@ -585,10 +600,13 @@ export async function getExpensesByCategory(userId, month, year) {
   }));
 }
 
-/** Ingresos del mes agrupados por categoría (para resumen mensual). */
-export async function getIncomesByCategory(userId, month, year) {
+/** Ingresos del mes agrupados por categoría (para resumen mensual). accountId opcional: filtra por cuenta. */
+export async function getIncomesByCategory(userId, month, year, accountId = null) {
   const m = month != null ? Number(month) : new Date().getMonth() + 1;
   const y = year != null ? Number(year) : new Date().getFullYear();
+  const params = [userId, m, y];
+  const accountFilter = accountId != null ? ' AND t.account_id = $4' : '';
+  if (accountId != null) params.push(Number(accountId));
   const { rows } = await query(
     `SELECT
        t.category_id AS category_id,
@@ -599,10 +617,10 @@ export async function getIncomesByCategory(userId, month, year) {
      LEFT JOIN categories c ON c.id = t.category_id AND c.user_id = t.user_id
      WHERE t.user_id = $1 AND t.type = 'income'
        AND EXTRACT(MONTH FROM t.date AT TIME ZONE 'UTC') = $2
-       AND EXTRACT(YEAR FROM t.date AT TIME ZONE 'UTC') = $3
+       AND EXTRACT(YEAR FROM t.date AT TIME ZONE 'UTC') = $3${accountFilter}
      GROUP BY t.category_id, c.name, c.icon
      ORDER BY total DESC`,
-    [userId, m, y]
+    params
   );
   return rows.map((r) => ({
     categoryId: r.category_id,
@@ -612,18 +630,22 @@ export async function getIncomesByCategory(userId, month, year) {
   }));
 }
 
-export async function getMonthlySummary(userId, year) {
+/** Resumen mensual (ingresos/gastos por mes). accountId opcional: filtra por cuenta. */
+export async function getMonthlySummary(userId, year, accountId = null) {
   const y = year != null ? Number(year) : new Date().getFullYear();
+  const params = [userId, y];
+  const accountFilter = accountId != null ? ' AND account_id = $3' : '';
+  if (accountId != null) params.push(Number(accountId));
   const { rows } = await query(
     `SELECT
        EXTRACT(MONTH FROM date AT TIME ZONE 'UTC')::int AS month,
        SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) AS income,
        SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) AS expense
      FROM transactions
-     WHERE user_id = $1 AND EXTRACT(YEAR FROM date AT TIME ZONE 'UTC') = $2
+     WHERE user_id = $1 AND EXTRACT(YEAR FROM date AT TIME ZONE 'UTC') = $2${accountFilter}
      GROUP BY EXTRACT(MONTH FROM date AT TIME ZONE 'UTC')
      ORDER BY month`,
-    [userId, y]
+    params
   );
   const byMonth = {};
   for (let m = 1; m <= 12; m++) {
@@ -638,9 +660,12 @@ export async function getMonthlySummary(userId, year) {
   return Object.values(byMonth);
 }
 
-/** Por cada día del año con transacciones: si hay ingresos y/o gastos (para indicadores en calendario). */
-export async function getDailyIndicators(userId, year) {
+/** Por cada día del año con transacciones: si hay ingresos y/o gastos (para indicadores en calendario). accountId opcional. */
+export async function getDailyIndicators(userId, year, accountId = null) { 
   const y = year != null ? Number(year) : new Date().getFullYear();
+  const params = [userId, y];
+  const accountFilter = accountId != null ? ' AND account_id = $3' : '';
+  if (accountId != null) params.push(Number(accountId));
   const { rows } = await query(
     `SELECT
        EXTRACT(MONTH FROM date AT TIME ZONE 'UTC')::int AS month,
@@ -648,9 +673,9 @@ export async function getDailyIndicators(userId, year) {
        MAX(CASE WHEN type = 'income' THEN 1 ELSE 0 END) AS has_income,
        MAX(CASE WHEN type = 'expense' THEN 1 ELSE 0 END) AS has_expense
      FROM transactions
-     WHERE user_id = $1 AND EXTRACT(YEAR FROM date AT TIME ZONE 'UTC') = $2
+     WHERE user_id = $1 AND EXTRACT(YEAR FROM date AT TIME ZONE 'UTC') = $2${accountFilter}
      GROUP BY EXTRACT(MONTH FROM date AT TIME ZONE 'UTC'), EXTRACT(DAY FROM date AT TIME ZONE 'UTC')`,
-    [userId, y]
+    params
   );
   return rows.map((r) => ({
     month: r.month,

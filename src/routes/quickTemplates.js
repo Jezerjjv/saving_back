@@ -1,3 +1,4 @@
+// (marcador cambios - borrar si quieres)
 import { Router } from 'express';
 import * as store from '../store.js';
 
@@ -45,10 +46,10 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const existing = await store.getQuickTemplate(id);
+    const existing = await store.getQuickTemplate(req.userId, id);
     if (!existing) return res.status(404).json({ error: 'Plantilla no encontrada' });
     const { name, icon, categoryId, amount, accountId, showInQuick } = req.body;
-    const t = await store.updateQuickTemplate(id, {
+    const t = await store.updateQuickTemplate(req.userId, id, { 
       name: name !== undefined ? String(name).trim() : undefined,
       icon: icon !== undefined ? icon : undefined,
       categoryId: categoryId !== undefined ? (categoryId == null ? null : Number(categoryId)) : undefined,

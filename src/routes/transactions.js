@@ -1,3 +1,4 @@
+// (marcador cambios - borrar si quieres)
 import { Router } from 'express';
 import * as store from '../store.js';
 
@@ -30,8 +31,12 @@ router.get('/grouped', async (req, res) => {
 
 router.get('/monthly-summary', async (req, res) => {
   try {
-    const { year } = req.query;
-    const result = await store.getMonthlySummary(req.userId, year ? Number(year) : null);
+    const { year, accountId } = req.query;
+    const result = await store.getMonthlySummary(
+      req.userId,
+      year ? Number(year) : null,
+      accountId != null && accountId !== '' ? Number(accountId) : null
+    );
     res.json(result);
   } catch (err) {
     console.error(err);
@@ -41,8 +46,12 @@ router.get('/monthly-summary', async (req, res) => {
 
 router.get('/daily-indicators', async (req, res) => {
   try {
-    const { year } = req.query;
-    const result = await store.getDailyIndicators(req.userId, year ? Number(year) : null);
+    const { year, accountId } = req.query;
+    const result = await store.getDailyIndicators( 
+      req.userId,
+      year ? Number(year) : null,
+      accountId != null && accountId !== '' ? Number(accountId) : null
+    );
     res.json(result);
   } catch (err) {
     console.error(err);
@@ -52,11 +61,12 @@ router.get('/daily-indicators', async (req, res) => {
 
 router.get('/expenses-by-category', async (req, res) => {
   try {
-    const { month, year } = req.query;
+    const { month, year, accountId } = req.query;
     const result = await store.getExpensesByCategory(
       req.userId,
       month ? Number(month) : null,
-      year ? Number(year) : null
+      year ? Number(year) : null,
+      accountId != null && accountId !== '' ? Number(accountId) : null
     );
     res.json(result);
   } catch (err) {
@@ -67,11 +77,12 @@ router.get('/expenses-by-category', async (req, res) => {
 
 router.get('/incomes-by-category', async (req, res) => {
   try {
-    const { month, year } = req.query;
+    const { month, year, accountId } = req.query;
     const result = await store.getIncomesByCategory(
       req.userId,
       month ? Number(month) : null,
-      year ? Number(year) : null
+      year ? Number(year) : null,
+      accountId != null && accountId !== '' ? Number(accountId) : null
     );
     res.json(result);
   } catch (err) {
