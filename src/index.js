@@ -16,6 +16,7 @@ import interestHistoryRouter from './routes/interestHistory.js';
 import cryptoRouter from './routes/crypto.js';
 import stocksRouter from './routes/stocks.js';
 import settingsRouter from './routes/settings.js';
+import pillLogRouter from './routes/pillLog.js';
 import { requireAuth } from './middleware/auth.js';
 import { startFixedDailyJob } from './jobs.js';
 
@@ -44,6 +45,7 @@ app.use('/api/interest-history', interestHistoryRouter);
 app.use('/api/crypto', cryptoRouter);
 app.use('/api/stocks', stocksRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/pill-log', pillLogRouter);
 
 app.listen(PORT, () => {
   console.log(`Servidor en http://localhost:${PORT}`);

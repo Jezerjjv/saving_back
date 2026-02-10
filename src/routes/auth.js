@@ -16,6 +16,7 @@ function rowUser(r) {
     pin_enabled: !!r.pin_enabled,
     bio_enabled: !!r.bio_enabled,
     pin_hash: r.pin_hash && String(r.pin_hash).length === 64 ? r.pin_hash : null,
+    is_admin: !!r.is_admin,
   };
 }
 
@@ -33,7 +34,7 @@ router.post('/register', async (req, res) => {
 
     const passwordHash = await bcrypt.hash(String(password), SALT_ROUNDS);
     const { rows } = await query(
-      'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, pin_enabled, bio_enabled, pin_hash',
+      'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, pin_enabled, bio_enabled, pin_hash, is_admin',
       [emailNorm, passwordHash, String(name).trim().slice(0, 255)]
     );
     const user = rowUser(rows[0]);
@@ -54,7 +55,7 @@ router.post('/login', async (req, res) => {
 
     const emailNorm = String(email).trim().toLowerCase();
     const { rows } = await query(
-      'SELECT id, email, name, password_hash, pin_enabled, bio_enabled, pin_hash FROM users WHERE email = $1',
+      'SELECT id, email, name, password_hash, pin_enabled, bio_enabled, pin_hash, is_admin FROM users WHERE email = $1',
       [emailNorm]
     );
     if (rows.length === 0) return res.status(401).json({ error: 'Email o contraseña incorrectos' });
@@ -76,7 +77,7 @@ router.post('/login', async (req, res) => {
 router.get('/me', requireAuth, async (req, res) => {
   try {
     const { rows } = await query(
-      'SELECT id, email, name, pin_enabled, bio_enabled, pin_hash FROM users WHERE id = $1',
+      'SELECT id, email, name, pin_enabled, bio_enabled, pin_hash, is_admin FROM users WHERE id = $1',
       [req.userId]
     );
     if (rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
@@ -124,14 +125,14 @@ router.patch('/me', requireAuth, async (req, res) => {
     }
     if (updates.length === 0) {
       const { rows } = await query(
-        'SELECT id, email, name, pin_enabled, bio_enabled, pin_hash FROM users WHERE id = $1',
+        'SELECT id, email, name, pin_enabled, bio_enabled, pin_hash, is_admin FROM users WHERE id = $1',
         [req.userId]
       );
       return res.json(rowUser(rows[0]));
     }
     params.push(req.userId);
     const { rows } = await query(
-      `UPDATE users SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, email, name, pin_enabled, bio_enabled, pin_hash`,
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${n} RETURNING id, email, name, pin_enabled, bio_enabled, pin_hash, is_admin`,
       params
     );
     if (rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });

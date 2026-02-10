@@ -1795,3 +1795,96 @@ export async function getStockHoldingDailyHistory(holdingId, year, month) {
     return [];
   }
 }
+
+// --- Pill log (control de pastillas) ---
+/** Tipos de pastilla del usuario (id, name, color) */
+export async function getPillTypes(userId) {
+  const { rows } = await query(
+    'SELECT id, name, color FROM pill_types WHERE user_id = $1 ORDER BY name',
+    [userId]
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    color: r.color || '#3498db',
+  }));
+}
+
+export async function createPillType(userId, { name, color }) {
+  const n = (name && String(name).trim()) || 'Pastilla';
+  const c = (color && String(color).trim()) || '#3498db';
+  const { rows } = await query(
+    'INSERT INTO pill_types (user_id, name, color) VALUES ($1, $2, $3) RETURNING id, name, color',
+    [userId, n, c]
+  );
+  return rows[0] ? { id: rows[0].id, name: rows[0].name, color: rows[0].color || '#3498db' } : null;
+}
+
+export async function updatePillType(userId, id, { name, color }) {
+  const updates = [];
+  const params = [];
+  let n = 1;
+  if (name !== undefined) {
+    updates.push(`name = $${n++}`);
+    params.push(String(name).trim());
+  }
+  if (color !== undefined) {
+    updates.push(`color = $${n++}`);
+    params.push(String(color).trim());
+  }
+  if (updates.length === 0) return (await getPillTypes(userId)).find((p) => p.id === id) || null;
+  params.push(id, userId);
+  const { rows } = await query(
+    `UPDATE pill_types SET ${updates.join(', ')} WHERE id = $${n} AND user_id = $${n + 1} RETURNING id, name, color`,
+    params
+  );
+  return rows[0] ? { id: rows[0].id, name: rows[0].name, color: rows[0].color || '#3498db' } : null;
+}
+
+export async function deletePillType(userId, id) {
+  const { rowCount } = await query('DELETE FROM pill_types WHERE id = $1 AND user_id = $2', [id, userId]);
+  return (rowCount ?? 0) > 0;
+}
+
+/** Por mes: { "YYYY-MM-DD": [ { id, name, color }, ... ], ... } */
+export async function getPillLogForMonth(userId, year, month) {
+  const y = Number(year);
+  const m = Number(month);
+  const { rows } = await query(
+    `SELECT pl.date, pt.id AS pill_type_id, pt.name AS pill_type_name, pt.color AS pill_type_color
+     FROM pill_log pl
+     JOIN pill_types pt ON pt.id = pl.pill_type_id AND pt.user_id = pl.user_id
+     WHERE pl.user_id = $1 AND EXTRACT(YEAR FROM pl.date) = $2 AND EXTRACT(MONTH FROM pl.date) = $3
+     ORDER BY pl.date, pt.name`,
+    [userId, y, m]
+  );
+  const byDate = {};
+  for (const r of rows) {
+    const dateStr = r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10);
+    if (!byDate[dateStr]) byDate[dateStr] = [];
+    byDate[dateStr].push({
+      id: r.pill_type_id,
+      name: r.pill_type_name,
+      color: r.pill_type_color || '#3498db',
+    });
+  }
+  return byDate;
+}
+
+/** Añadir o quitar un tipo de pastilla en un día */
+export async function setPillLogDay(userId, dateStr, pillTypeId, add) {
+  const date = dateStr && String(dateStr).slice(0, 10);
+  if (!date || !pillTypeId) return false;
+  if (add) {
+    await query(
+      'INSERT INTO pill_log (user_id, date, pill_type_id) VALUES ($1, $2, $3) ON CONFLICT (user_id, date, pill_type_id) DO NOTHING',
+      [userId, date, Number(pillTypeId)]
+    );
+    return true;
+  }
+  const { rowCount } = await query(
+    'DELETE FROM pill_log WHERE user_id = $1 AND date = $2 AND pill_type_id = $3',
+    [userId, date, Number(pillTypeId)]
+  );
+  return (rowCount ?? 0) > 0;
+}
