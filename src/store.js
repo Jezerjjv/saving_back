@@ -1888,3 +1888,4 @@ export async function setPillLogDay(userId, dateStr, pillTypeId, add) {
   );
   return (rowCount ?? 0) > 0;
 }
+

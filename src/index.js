@@ -18,7 +18,7 @@ import stocksRouter from './routes/stocks.js';
 import settingsRouter from './routes/settings.js';
 import pillLogRouter from './routes/pillLog.js';
 import { requireAuth } from './middleware/auth.js';
-import { startFixedDailyJob } from './jobs.js';
+import { startFixedDailyJob } from './jobs.js'; 
 
 const app = express();
 const PORT = process.env.PORT || 3001;
