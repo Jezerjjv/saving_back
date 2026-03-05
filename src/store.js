@@ -1072,6 +1072,105 @@ export async function deleteQuickTemplate(userId, id) {
   return rowCount > 0;
 }
 
+// --- Quick log (tabla rápida: gastos/ingresos sin cuenta) ---
+function formatDateOnly(d) {
+  if (!d) return null;
+  if (d instanceof Date) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+  return String(d).slice(0, 10);
+}
+
+function rowQuickLogEntry(r) {
+  if (!r) return null;
+  const dateStr = formatDateOnly(r.date);
+  return {
+    id: r.id,
+    name: r.name,
+    amount: Number(r.amount),
+    type: r.type,
+    categoryId: r.category_id != null ? r.category_id : null,
+    date: dateStr,
+  };
+}
+
+export async function getQuickLogEntries(userId) {
+  const { rows } = await query(
+    "SELECT id, name, amount, type, category_id, to_char(date, 'YYYY-MM-DD') AS date FROM quick_log_entries WHERE user_id = $1 ORDER BY date DESC, id DESC",
+    [userId]
+  );
+  return rows.map(rowQuickLogEntry);
+}
+
+export async function getQuickLogEntry(userId, id) {
+  const { rows } = await query(
+    "SELECT id, name, amount, type, category_id, to_char(date, 'YYYY-MM-DD') AS date FROM quick_log_entries WHERE id = $1 AND user_id = $2",
+    [id, userId]
+  );
+  return rowQuickLogEntry(rows[0]);
+}
+
+export async function createQuickLogEntry(userId, { name, amount, type, categoryId, date }) {
+  const amt = Number(amount) || 0;
+  if (amt <= 0) throw new Error('El importe debe ser positivo');
+  if (type !== 'expense' && type !== 'income') throw new Error('type debe ser expense o income');
+  const now = new Date();
+  const todayBackend = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const dateVal = date ? String(date).slice(0, 10) : todayBackend;
+  const catId = categoryId != null && categoryId !== '' ? Number(categoryId) : null;
+  const { rows } = await query(
+    "INSERT INTO quick_log_entries (user_id, name, amount, type, category_id, date) VALUES ($1, $2, $3, $4, $5, $6::date) RETURNING id, name, amount, type, category_id, to_char(date, 'YYYY-MM-DD') AS date",
+    [userId, (name || '').trim(), amt, type, catId, dateVal]
+  );
+  return rowQuickLogEntry(rows[0]);
+}
+
+export async function updateQuickLogEntry(userId, id, { name, amount, type, categoryId, date }) {
+  const old = await getQuickLogEntry(userId, id);
+  if (!old) return null;
+  const updates = [];
+  const params = [];
+  let n = 1;
+  if (name !== undefined) {
+    updates.push(`name = $${n++}`);
+    params.push(String(name).trim());
+  }
+  if (amount !== undefined) {
+    const amt = Number(amount) || 0;
+    if (amt <= 0) throw new Error('El importe debe ser positivo');
+    updates.push(`amount = $${n++}`);
+    params.push(amt);
+  }
+  if (type !== undefined) {
+    if (type !== 'expense' && type !== 'income') throw new Error('type debe ser expense o income');
+    updates.push(`type = $${n++}`);
+    params.push(type);
+  }
+  if (categoryId !== undefined) {
+    updates.push(`category_id = $${n++}`);
+    params.push(categoryId != null && categoryId !== '' ? Number(categoryId) : null);
+  }
+  if (date !== undefined) {
+    updates.push(`date = $${n++}`);
+    params.push(String(date).slice(0, 10));
+  }
+  if (updates.length === 0) return old;
+  params.push(id, userId);
+  const { rows } = await query(
+    `UPDATE quick_log_entries SET ${updates.join(', ')} WHERE id = $${n} AND user_id = $${n + 1} RETURNING id, name, amount, type, category_id, to_char(date, 'YYYY-MM-DD') AS date`,
+    params
+  );
+  return rowQuickLogEntry(rows[0]);
+}
+
+export async function deleteQuickLogEntry(userId, id) {
+  const { rowCount } = await query('DELETE FROM quick_log_entries WHERE id = $1 AND user_id = $2', [id, userId]);
+  return rowCount > 0;
+}
+
 // --- Transfers (por usuario) ---
 export async function getTransfers(userId) {
   const { rows } = await query(
