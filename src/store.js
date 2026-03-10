@@ -1171,6 +1171,69 @@ export async function deleteQuickLogEntry(userId, id) {
   return rowCount > 0;
 }
 
+// --- Quick accounts (cuentas rápidas: solo en vista Cuentas rápida) ---
+function rowQuickAccount(r) {
+  return r ? { id: r.id, name: r.name, balance: Number(r.balance), currency: r.currency || 'EUR' } : null;
+}
+
+export async function getQuickAccounts(userId) {
+  const { rows } = await query(
+    'SELECT id, name, balance, currency FROM quick_accounts WHERE user_id = $1 ORDER BY name',
+    [userId]
+  );
+  return rows.map(rowQuickAccount);
+}
+
+export async function getQuickAccount(userId, id) {
+  const { rows } = await query(
+    'SELECT id, name, balance, currency FROM quick_accounts WHERE id = $1 AND user_id = $2',
+    [id, userId]
+  );
+  return rowQuickAccount(rows[0]);
+}
+
+export async function createQuickAccount(userId, { name, balance, currency }) {
+  const bal = Number(balance) ?? 0;
+  const curr = (currency && String(currency).trim()) || 'EUR';
+  const { rows } = await query(
+    'INSERT INTO quick_accounts (user_id, name, balance, currency) VALUES ($1, $2, $3, $4) RETURNING id, name, balance, currency',
+    [userId, (name || '').trim(), bal, curr]
+  );
+  return rowQuickAccount(rows[0]);
+}
+
+export async function updateQuickAccount(userId, id, { name, balance, currency }) {
+  const existing = await getQuickAccount(userId, id);
+  if (!existing) return null;
+  const updates = [];
+  const params = [];
+  let n = 1;
+  if (name !== undefined) {
+    updates.push(`name = $${n++}`);
+    params.push(String(name).trim());
+  }
+  if (balance !== undefined) {
+    updates.push(`balance = $${n++}`);
+    params.push(Number(balance) ?? 0);
+  }
+  if (currency !== undefined) {
+    updates.push(`currency = $${n++}`);
+    params.push((currency && String(currency).trim()) || 'EUR');
+  }
+  if (updates.length === 0) return existing;
+  params.push(id, userId);
+  const { rows } = await query(
+    `UPDATE quick_accounts SET ${updates.join(', ')} WHERE id = $${n} AND user_id = $${n + 1} RETURNING id, name, balance, currency`,
+    params
+  );
+  return rowQuickAccount(rows[0]);
+}
+
+export async function deleteQuickAccount(userId, id) {
+  const { rowCount } = await query('DELETE FROM quick_accounts WHERE id = $1 AND user_id = $2', [id, userId]);
+  return rowCount > 0;
+}
+
 // --- Transfers (por usuario) ---
 export async function getTransfers(userId) {
   const { rows } = await query(
